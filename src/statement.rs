@@ -1,11 +1,36 @@
 use crate::batch_reader::SingleBatchReader;
+use crate::client::DruidClient;
 use adbc_core::error::{Error, Result, Status};
 use adbc_core::options::{OptionStatement, OptionValue};
 use adbc_core::{Optionable, PartitionedResult, Statement};
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::Schema;
+use std::sync::Arc;
 
-pub struct DruidStatement {}
+#[derive(Debug)]
+pub struct DruidStatement {
+    client: Arc<DruidClient>,
+    sql_query: Option<String>,
+}
+
+impl DruidStatement {
+    #[must_use]
+    pub fn new(client: Arc<DruidClient>) -> Self {
+        Self {
+            client,
+            sql_query: None,
+        }
+    }
+
+    fn query(&self) -> Result<&str> {
+        self.sql_query.as_deref().ok_or_else(|| {
+            Error::with_message_and_status(
+                "No SQL query set. Call set_sql_query first.".to_string(),
+                Status::InvalidState,
+            )
+        })
+    }
+}
 
 impl Statement for DruidStatement {
     fn bind(&mut self, _batch: RecordBatch) -> Result<()> {
@@ -23,17 +48,15 @@ impl Statement for DruidStatement {
     }
 
     fn execute(&mut self) -> Result<impl RecordBatchReader + Send> {
-        Err::<SingleBatchReader, Error>(Error::with_message_and_status(
-            "execute not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+        let batch = self.client.execute_query(self.query()?)?;
+        Ok(SingleBatchReader::new(batch))
     }
 
     fn execute_update(&mut self) -> Result<Option<i64>> {
-        Err(Error::with_message_and_status(
-            "execute_update not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+        // Execute the query and discard the result batch. Druid's SQL API
+        // doesn't return affected row counts for DML/DDL statements.
+        let _result = self.client.execute_query(self.query()?)?;
+        Ok(None)
     }
 
     fn execute_schema(&mut self) -> Result<Schema> {
@@ -64,11 +87,9 @@ impl Statement for DruidStatement {
         ))
     }
 
-    fn set_sql_query(&mut self, _query: impl AsRef<str>) -> Result<()> {
-        Err(Error::with_message_and_status(
-            "set_sql_query not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+    fn set_sql_query(&mut self, query: impl AsRef<str>) -> Result<()> {
+        self.sql_query = Some(query.as_ref().to_string());
+        Ok(())
     }
 
     fn set_substrait_plan(&mut self, _plan: impl AsRef<[u8]>) -> Result<()> {
@@ -122,5 +143,39 @@ impl Optionable for DruidStatement {
             "get_option_double not implemented".to_string(),
             Status::NotImplemented,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_client() -> Arc<DruidClient> {
+        Arc::new(DruidClient::new("http://localhost:8888").unwrap())
+    }
+
+    #[test]
+    fn test_set_sql_query() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let result = stmt.set_sql_query("SELECT 1");
+        assert!(result.is_ok());
+        assert_eq!(stmt.sql_query, Some("SELECT 1".to_string()));
+    }
+
+    #[test]
+    fn test_set_sql_query_overwrites_previous() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        stmt.set_sql_query("SELECT 1").unwrap();
+        stmt.set_sql_query("SELECT 2").unwrap();
+        assert_eq!(stmt.sql_query, Some("SELECT 2".to_string()));
+    }
+
+    #[test]
+    fn test_execute_update_without_query_returns_error() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let result = stmt.execute_update();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status, Status::InvalidState);
     }
 }

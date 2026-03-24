@@ -6,6 +6,16 @@ pub struct SingleBatchReader {
     schema: SchemaRef,
 }
 
+impl SingleBatchReader {
+    pub fn new(batch: RecordBatch) -> Self {
+        let schema = batch.schema();
+        Self {
+            batch: Some(batch),
+            schema,
+        }
+    }
+}
+
 impl Iterator for SingleBatchReader {
     type Item = std::result::Result<RecordBatch, ArrowError>;
 

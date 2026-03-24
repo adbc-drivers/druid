@@ -1,4 +1,5 @@
 use crate::batch_reader::SingleBatchReader;
+use crate::client::DruidClient;
 use crate::statement::DruidStatement;
 use adbc_core::error::{Error, Result, Status};
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionValue};
@@ -6,14 +7,30 @@ use adbc_core::{Connection, Optionable};
 use arrow_array::RecordBatchReader;
 use arrow_schema::Schema;
 use std::collections::HashSet;
+use std::sync::Arc;
 
-pub struct DruidConnection {}
+#[derive(Debug)]
+pub struct DruidConnection {
+    client: Arc<DruidClient>,
+}
+
+impl DruidConnection {
+    /// Creates a new `DruidConnection` with the given URI.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP client fails to build.
+    pub fn new(uri: impl Into<String>) -> Result<Self> {
+        Ok(Self {
+            client: Arc::new(DruidClient::new(uri)?),
+        })
+    }
+}
 
 impl Connection for DruidConnection {
     type StatementType = DruidStatement;
 
     fn new_statement(&mut self) -> Result<Self::StatementType> {
-        Ok(DruidStatement {})
+        Ok(DruidStatement::new(Arc::clone(&self.client)))
     }
 
     fn cancel(&mut self) -> Result<()> {

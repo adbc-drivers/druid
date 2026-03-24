@@ -13,6 +13,6 @@ An ADBC driver for Apache Druid, written in Rust.
 
 - Add dependencies: `cargo add [options] <crate>`
 - Build the driver: `cargo build`
-- Run tests: `cargo test`
+- Run tests: `cargo test -- --include-ignored`
 - Run linter: `cargo clippy`
 - Run formatter: `cargo fmt`

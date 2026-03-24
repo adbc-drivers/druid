@@ -1,0 +1,271 @@
+//! Integration tests for the Druid ADBC driver
+//!
+//! Most tests require a running Druid instance at <http://localhost:8888>
+//! with the wikipedia datasource loaded. These are marked with `#[ignore]`
+//! and can be run with `cargo test -- --ignored`.
+
+use adbc_core::options::{OptionDatabase, OptionValue};
+use adbc_core::{Connection, Database, Driver, Optionable, Statement};
+use arrow_array::RecordBatchReader;
+use arrow_array::cast::AsArray;
+use druid_driver::{DruidConnection, DruidDriver};
+
+fn get_connection() -> DruidConnection {
+    let mut driver = DruidDriver::default();
+    let mut db = driver.new_database().unwrap();
+    db.set_option(
+        OptionDatabase::Uri,
+        OptionValue::String("http://localhost:8888".to_string()),
+    )
+    .unwrap();
+    db.new_connection().unwrap()
+}
+
+#[test]
+#[ignore]
+fn test_execute_simple_query() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT 1").unwrap();
+    let reader = stmt.execute().unwrap();
+
+    let schema = reader.schema();
+    assert_eq!(schema.fields().len(), 1);
+    assert_eq!(schema.field(0).name(), "EXPR$0");
+
+    let batches: Vec<_> = reader.collect();
+    assert_eq!(batches.len(), 1);
+
+    let batch = batches[0].as_ref().unwrap();
+    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(batch.num_columns(), 1);
+
+    let col = batch
+        .column(0)
+        .as_primitive::<arrow_array::types::Int64Type>();
+    assert_eq!(col.value(0), 1);
+}
+
+#[test]
+#[ignore]
+fn test_execute_query_with_multiple_columns() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT channel, page, added FROM wikipedia LIMIT 3")
+        .unwrap();
+    let reader = stmt.execute().unwrap();
+
+    let schema = reader.schema();
+    assert_eq!(schema.fields().len(), 3);
+    assert_eq!(schema.field(0).name(), "channel");
+    assert_eq!(schema.field(1).name(), "page");
+    assert_eq!(schema.field(2).name(), "added");
+
+    let batches: Vec<_> = reader.collect();
+    assert_eq!(batches.len(), 1);
+
+    let batch = batches[0].as_ref().unwrap();
+    assert_eq!(batch.num_rows(), 3);
+}
+
+#[test]
+#[ignore]
+fn test_execute_query_with_string_columns() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT channel FROM wikipedia LIMIT 1")
+        .unwrap();
+    let reader = stmt.execute().unwrap();
+
+    let batches: Vec<_> = reader.collect();
+    let batch = batches[0].as_ref().unwrap();
+
+    let channel_col = batch.column(0).as_string::<i32>();
+    assert!(!channel_col.value(0).is_empty());
+}
+
+#[test]
+#[ignore]
+fn test_execute_query_returns_correct_types() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT added, deleted, channel FROM wikipedia LIMIT 1")
+        .unwrap();
+    let reader = stmt.execute().unwrap();
+
+    let schema = reader.schema();
+
+    // added and deleted are LONG in Druid -> Int64 in Arrow
+    assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Int64);
+    assert_eq!(schema.field(1).data_type(), &arrow_schema::DataType::Int64);
+    // channel is STRING in Druid -> Utf8 in Arrow
+    assert_eq!(schema.field(2).data_type(), &arrow_schema::DataType::Utf8);
+}
+
+#[test]
+fn test_execute_without_query_fails() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    let result = stmt.execute();
+    assert!(result.is_err());
+}
+
+#[test]
+#[ignore]
+fn test_execute_invalid_sql_returns_error() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT * FROM nonexistent_table")
+        .unwrap();
+    let result = stmt.execute();
+    assert!(result.is_err());
+}
+
+#[test]
+#[ignore]
+fn test_query_information_schema() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query(
+        "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'druid'",
+    )
+    .unwrap();
+    let reader = stmt.execute().unwrap();
+
+    let batches: Vec<_> = reader.collect();
+    assert!(!batches.is_empty());
+
+    let batch = batches[0].as_ref().unwrap();
+    assert!(batch.num_rows() >= 1); // At least wikipedia table should exist
+}
+
+#[test]
+#[ignore]
+fn test_query_with_null_values() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    // cityName and countryName can be null
+    stmt.set_sql_query("SELECT cityName, countryName FROM wikipedia LIMIT 5")
+        .unwrap();
+    let reader = stmt.execute().unwrap();
+
+    let batches: Vec<_> = reader.collect();
+    let batch = batches[0].as_ref().unwrap();
+    assert_eq!(batch.num_rows(), 5);
+}
+
+#[test]
+#[ignore]
+fn test_multiple_statements_on_connection() {
+    let mut conn = get_connection();
+
+    // First query
+    let mut stmt1 = conn.new_statement().unwrap();
+    stmt1.set_sql_query("SELECT 1").unwrap();
+    let reader1 = stmt1.execute().unwrap();
+    let batches1: Vec<_> = reader1.collect();
+    assert_eq!(batches1.len(), 1);
+
+    // Second query
+    let mut stmt2 = conn.new_statement().unwrap();
+    stmt2.set_sql_query("SELECT 2").unwrap();
+    let reader2 = stmt2.execute().unwrap();
+    let batches2: Vec<_> = reader2.collect();
+    assert_eq!(batches2.len(), 1);
+}
+
+#[test]
+fn test_connection_without_uri_fails() {
+    let mut driver = DruidDriver::default();
+    let db = driver.new_database().unwrap();
+    let result = db.new_connection();
+    assert!(result.is_err());
+}
+
+#[test]
+#[ignore]
+fn test_connection_with_invalid_uri() {
+    let mut driver = DruidDriver::default();
+    let mut db = driver.new_database().unwrap();
+    db.set_option(
+        OptionDatabase::Uri,
+        OptionValue::String("http://nonexistent-host:9999".to_string()),
+    )
+    .unwrap();
+    let mut conn = db.new_connection().unwrap();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT 1").unwrap();
+    let result = stmt.execute();
+    assert!(result.is_err());
+}
+
+#[test]
+#[ignore]
+fn test_aggregation_query() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT COUNT(*) AS cnt FROM wikipedia")
+        .unwrap();
+    let reader = stmt.execute().unwrap();
+
+    let batches: Vec<_> = reader.collect();
+    assert_eq!(batches.len(), 1);
+
+    let batch = batches[0].as_ref().unwrap();
+    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(batch.num_columns(), 1);
+
+    let cnt = batch
+        .column(0)
+        .as_primitive::<arrow_array::types::Int64Type>();
+    assert!(cnt.value(0) > 0);
+}
+
+#[test]
+#[ignore]
+fn test_group_by_query() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT channel, COUNT(*) AS cnt FROM wikipedia GROUP BY channel LIMIT 5")
+        .unwrap();
+    let reader = stmt.execute().unwrap();
+
+    let schema = reader.schema();
+    assert_eq!(schema.fields().len(), 2);
+
+    let batches: Vec<_> = reader.collect();
+    let batch = batches[0].as_ref().unwrap();
+    assert!(batch.num_rows() > 0);
+    assert!(batch.num_rows() <= 5);
+}
+
+#[test]
+#[ignore]
+fn test_timestamp_column() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT __time FROM wikipedia LIMIT 1")
+        .unwrap();
+    let reader = stmt.execute().unwrap();
+
+    let schema = reader.schema();
+    assert_eq!(schema.fields().len(), 1);
+    // __time should be reported as TIMESTAMP -> Arrow Timestamp
+    assert_eq!(
+        schema.field(0).data_type(),
+        &arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None)
+    );
+
+    let batches: Vec<_> = reader.collect();
+    let batch = batches[0].as_ref().unwrap();
+    assert_eq!(batch.num_rows(), 1);
+
+    // Verify we can read the timestamp value
+    let time_col = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::TimestampMillisecondArray>()
+        .unwrap();
+    // Wikipedia data is from 2015, so timestamp should be > 0
+    assert!(time_col.value(0) > 0);
+}
