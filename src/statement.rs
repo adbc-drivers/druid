@@ -146,6 +146,13 @@ impl DruidStatement {
             .take()
             .map_or_else(|| Ok(vec![]), |batch| Self::build_parameters(&batch))
     }
+
+    fn build_schema_query(&self) -> Result<String> {
+        let query = self.query()?;
+        // Wrap in subquery with LIMIT 0 to get schema without data
+        // Druid requires subqueries to have an alias
+        Ok(format!("SELECT * FROM ({query}) AS __schema_query LIMIT 0"))
+    }
 }
 
 impl Statement for DruidStatement {
@@ -182,10 +189,9 @@ impl Statement for DruidStatement {
     }
 
     fn execute_schema(&mut self) -> Result<Schema> {
-        Err(Error::with_message_and_status(
-            "execute_schema not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+        let schema_query = self.build_schema_query()?;
+        let batch = self.client.execute_query(&schema_query, vec![])?;
+        Ok(batch.schema().as_ref().clone())
     }
 
     fn execute_partitions(&mut self) -> Result<PartitionedResult> {

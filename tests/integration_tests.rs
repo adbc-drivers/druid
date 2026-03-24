@@ -347,3 +347,70 @@ fn test_array_columns() {
     assert_eq!(str_array.value(0), "a");
     assert_eq!(str_array.value(1), "b");
 }
+
+#[test]
+#[ignore]
+fn test_execute_schema_simple() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT channel, page, added FROM wikipedia LIMIT 10")
+        .unwrap();
+
+    let schema = stmt.execute_schema().unwrap();
+
+    assert_eq!(schema.fields().len(), 3);
+    assert_eq!(schema.field(0).name(), "channel");
+    assert_eq!(schema.field(1).name(), "page");
+    assert_eq!(schema.field(2).name(), "added");
+    assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Utf8);
+    assert_eq!(schema.field(2).data_type(), &arrow_schema::DataType::Int64);
+}
+
+#[test]
+fn test_execute_schema_without_query_fails() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    let result = stmt.execute_schema();
+    assert!(result.is_err());
+}
+
+#[test]
+#[ignore]
+fn test_execute_schema_does_not_consume_bind_data() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT channel, page FROM wikipedia LIMIT 1")
+        .unwrap();
+
+    // Bind parameters (even though this query doesn't use them)
+    let mut builder = arrow_array::builder::Int64Builder::new();
+    builder.append_value(41);
+    let array: arrow_array::ArrayRef = std::sync::Arc::new(builder.finish());
+    let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+        "p",
+        arrow_schema::DataType::Int64,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+    stmt.bind(batch).unwrap();
+
+    // Get schema - should NOT consume bind data
+    let result_schema = stmt.execute_schema().unwrap();
+    assert_eq!(result_schema.fields().len(), 2);
+    assert_eq!(result_schema.field(0).name(), "channel");
+
+    // Verify bind_data is still present by setting a new query with parameters
+    // and verifying execution works
+    stmt.set_sql_query("SELECT ? + 1 AS the_answer").unwrap();
+
+    // Execute should still work with the previously bound parameters
+    let reader = stmt.execute().unwrap();
+    let batches: Vec<_> = reader.collect();
+    assert_eq!(batches.len(), 1);
+
+    let result_batch = batches[0].as_ref().unwrap();
+    let col = result_batch
+        .column(0)
+        .as_primitive::<arrow_array::types::Int64Type>();
+    assert_eq!(col.value(0), 42);
+}
