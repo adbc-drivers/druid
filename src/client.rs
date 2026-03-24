@@ -7,14 +7,14 @@ use std::time::Duration;
 use arrow_array::{
     ArrayRef, RecordBatch,
     builder::{
-        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int64Builder, StringBuilder,
-        TimestampMillisecondBuilder,
+        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int64Builder, ListBuilder,
+        StringBuilder, TimestampMillisecondBuilder,
     },
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
 /// Maps Druid SQL types to Arrow types and handles array construction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum DruidType {
     Int64,
     Float32,
@@ -23,12 +23,21 @@ enum DruidType {
     Timestamp,
     Date,
     String,
+    List(Box<DruidType>),
 }
 
 impl DruidType {
     /// Parse a Druid/SQL type string into a `DruidType`.
     fn from_sql_type(s: &str) -> Self {
-        match s.to_uppercase().as_str() {
+        let upper = s.to_uppercase();
+        // Handle parameterized ARRAY types like ARRAY<LONG>, ARRAY<STRING>
+        if let Some(inner) = upper
+            .strip_prefix("ARRAY<")
+            .and_then(|rest| rest.strip_suffix('>'))
+        {
+            return Self::List(Box::new(Self::from_sql_type(inner)));
+        }
+        match upper.as_str() {
             // Native Druid integer type and SQL integer types
             "LONG" | "BIGINT" | "INTEGER" | "INT" | "SMALLINT" | "TINYINT" => Self::Int64,
             // Single-precision float
@@ -41,13 +50,15 @@ impl DruidType {
             "TIMESTAMP" => Self::Timestamp,
             // Date (Druid returns as YYYY-MM-DD string)
             "DATE" => Self::Date,
+            // Bare ARRAY without element type defaults to List(String)
+            "ARRAY" => Self::List(Box::new(Self::String)),
             // String types and unknown/complex types
             _ => Self::String,
         }
     }
 
     /// Convert to the corresponding Arrow `DataType`.
-    fn to_arrow_type(self) -> DataType {
+    fn to_arrow_type(&self) -> DataType {
         match self {
             Self::Int64 => DataType::Int64,
             Self::Float32 => DataType::Float32,
@@ -56,12 +67,15 @@ impl DruidType {
             Self::Timestamp => DataType::Timestamp(TimeUnit::Millisecond, None),
             Self::Date => DataType::Date32,
             Self::String => DataType::Utf8,
+            Self::List(inner) => {
+                DataType::List(Arc::new(Field::new("item", inner.to_arrow_type(), true)))
+            }
         }
     }
 
     /// Build an Arrow array from an iterator of optional JSON values.
     fn build_array<'a>(
-        self,
+        &self,
         values: impl Iterator<Item = Option<&'a serde_json::Value>>,
     ) -> ArrayRef {
         // Collect to get length for capacity hints
@@ -134,6 +148,70 @@ impl DruidType {
                 }
                 Arc::new(builder.finish())
             }
+            Self::List(inner_type) => Self::build_list_array(inner_type, &values),
+        }
+    }
+
+    /// Build a `ListArray` from JSON array values using the given inner element type.
+    fn build_list_array(inner_type: &DruidType, values: &[Option<&serde_json::Value>]) -> ArrayRef {
+        /// Iterates over row values, appending each JSON array's elements to a
+        /// `ListBuilder` using the provided element-extraction closure.
+        /// Non-array and null values produce null list entries.
+        macro_rules! build_typed_list {
+            ($builder_type:ty, $extract:expr) => {{
+                let mut builder = ListBuilder::new(<$builder_type>::new());
+                for v in values {
+                    if let Some(serde_json::Value::Array(arr)) = v {
+                        for elem in arr {
+                            builder.values().append_option($extract(elem));
+                        }
+                        builder.append(true);
+                    } else {
+                        builder.append_null();
+                    }
+                }
+                Arc::new(builder.finish())
+            }};
+        }
+
+        match inner_type {
+            #[allow(clippy::cast_possible_truncation)]
+            DruidType::Int64 => build_typed_list!(Int64Builder, |elem: &serde_json::Value| {
+                elem.as_i64().or_else(|| elem.as_f64().map(|f| f as i64))
+            }),
+            #[allow(clippy::cast_possible_truncation)]
+            DruidType::Float32 => {
+                build_typed_list!(Float32Builder, |elem: &serde_json::Value| {
+                    elem.as_f64().map(|f| f as f32)
+                })
+            }
+            DruidType::Float64 => {
+                build_typed_list!(Float64Builder, serde_json::Value::as_f64)
+            }
+            DruidType::Boolean => {
+                build_typed_list!(BooleanBuilder, serde_json::Value::as_bool)
+            }
+            // For String and any other inner types, store elements as strings
+            _ => {
+                let mut builder = ListBuilder::new(StringBuilder::new());
+                for v in values {
+                    if let Some(serde_json::Value::Array(arr)) = v {
+                        for elem in arr {
+                            if elem.is_null() {
+                                builder.values().append_null();
+                            } else if let Some(s) = elem.as_str() {
+                                builder.values().append_value(s);
+                            } else {
+                                builder.values().append_value(elem.to_string());
+                            }
+                        }
+                        builder.append(true);
+                    } else {
+                        builder.append_null();
+                    }
+                }
+                Arc::new(builder.finish())
+            }
         }
     }
 }
@@ -151,7 +229,9 @@ struct SqlRequest {
     query: String,
     result_format: String,
     header: bool,
+    types_header: bool,
     sql_types_header: bool,
+    context: serde_json::Value,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     parameters: Vec<SqlParameter>,
 }
@@ -229,7 +309,9 @@ impl DruidClient {
             query: query.to_string(),
             result_format: "array".to_string(),
             header: true,
+            types_header: true,
             sql_types_header: true,
+            context: serde_json::json!({ "sqlStringifyArrays": false }),
             parameters,
         };
 
@@ -270,9 +352,14 @@ impl DruidClient {
             return Ok(RecordBatch::new_empty(Arc::new(Schema::empty())));
         }
 
-        if rows.len() < 2 {
+        // With both typesHeader and sqlTypesHeader enabled, the response contains:
+        // Row 0 = column names
+        // Row 1 = native Druid types (e.g., STRING, LONG, ARRAY<LONG>)
+        // Row 2 = SQL types (e.g., VARCHAR, BIGINT, ARRAY)
+        // Rows 3+ = data
+        if rows.len() < 3 {
             return Err(Error::with_message_and_status(
-                "Response must contain at least column names and types rows".to_string(),
+                "Response must contain column names, native types, and SQL types rows".to_string(),
                 Status::Internal,
             ));
         }
@@ -280,13 +367,25 @@ impl DruidClient {
         // Parse column names, defaulting to empty string for non-string values
         let column_names: Vec<&str> = rows[0].iter().map(|v| v.as_str().unwrap_or("")).collect();
 
-        // Parse column types, defaulting to STRING for non-string or unknown types
+        // Resolve column types from both header rows. The native type row (row 1)
+        // is the richer source — it carries parameterized types like ARRAY<LONG>.
+        // However, native type "LONG" is ambiguous (BIGINT, TIMESTAMP, DATE, BOOLEAN
+        // all map to LONG at runtime), so we fall back to the SQL type row (row 2)
+        // to disambiguate.
         let column_types: Vec<DruidType> = rows[1]
             .iter()
-            .map(|v| DruidType::from_sql_type(v.as_str().unwrap_or("STRING")))
+            .zip(rows[2].iter())
+            .map(|(native_type, sql_type)| {
+                let native = native_type.as_str().unwrap_or("STRING");
+                if native.eq_ignore_ascii_case("LONG") {
+                    DruidType::from_sql_type(sql_type.as_str().unwrap_or("BIGINT"))
+                } else {
+                    DruidType::from_sql_type(native)
+                }
+            })
             .collect();
 
-        let data_rows = &rows[2..];
+        let data_rows = &rows[3..];
 
         let (fields, arrays): (Vec<_>, Vec<_>) = column_names
             .iter()
@@ -314,6 +413,20 @@ impl DruidClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::Array;
+    use arrow_array::cast::AsArray;
+
+    fn make_sql_request(query: &str, parameters: Vec<SqlParameter>) -> SqlRequest {
+        SqlRequest {
+            query: query.to_string(),
+            result_format: "array".to_string(),
+            header: true,
+            types_header: true,
+            sql_types_header: true,
+            context: serde_json::json!({ "sqlStringifyArrays": false }),
+            parameters,
+        }
+    }
 
     #[test]
     fn test_druid_type_from_sql_type() {
@@ -373,6 +486,7 @@ mod tests {
     fn test_rows_to_record_batch_with_data() {
         let rows = vec![
             vec![serde_json::json!("name"), serde_json::json!("value")],
+            vec![serde_json::json!("STRING"), serde_json::json!("LONG")],
             vec![serde_json::json!("VARCHAR"), serde_json::json!("BIGINT")],
             vec![serde_json::json!("test"), serde_json::json!(42)],
         ];
@@ -385,7 +499,11 @@ mod tests {
 
     #[test]
     fn test_rows_to_record_batch_missing_types() {
-        let rows = vec![vec![serde_json::json!("name")]];
+        // With both typesHeader and sqlTypesHeader, we need at least 3 rows
+        let rows = vec![
+            vec![serde_json::json!("name")],
+            vec![serde_json::json!("STRING")],
+        ];
         let result = DruidClient::rows_to_record_batch(&rows);
         assert!(result.is_err());
     }
@@ -413,16 +531,13 @@ mod tests {
 
     #[test]
     fn test_sql_request_serializes_with_parameters() {
-        let request = SqlRequest {
-            query: "SELECT ? + 1".to_string(),
-            result_format: "array".to_string(),
-            header: true,
-            sql_types_header: true,
-            parameters: vec![SqlParameter {
+        let request = make_sql_request(
+            "SELECT ? + 1",
+            vec![SqlParameter {
                 sql_type: "BIGINT".to_string(),
                 value: serde_json::json!(41),
             }],
-        };
+        );
         let json = serde_json::to_value(&request).unwrap();
         let params = json.get("parameters").unwrap().as_array().unwrap();
         assert_eq!(params.len(), 1);
@@ -432,14 +547,149 @@ mod tests {
 
     #[test]
     fn test_sql_request_omits_empty_parameters() {
-        let request = SqlRequest {
-            query: "SELECT 1".to_string(),
-            result_format: "array".to_string(),
-            header: true,
-            sql_types_header: true,
-            parameters: vec![],
-        };
-        let json = serde_json::to_value(&request).unwrap();
+        let json = serde_json::to_value(&make_sql_request("SELECT 1", vec![])).unwrap();
         assert!(json.get("parameters").is_none());
+    }
+
+    #[test]
+    fn test_druid_type_from_sql_type_array() {
+        // ARRAY<LONG> -> List(Int64)
+        assert_eq!(
+            DruidType::from_sql_type("ARRAY<LONG>"),
+            DruidType::List(Box::new(DruidType::Int64))
+        );
+        // ARRAY<STRING> -> List(String)
+        assert_eq!(
+            DruidType::from_sql_type("ARRAY<STRING>"),
+            DruidType::List(Box::new(DruidType::String))
+        );
+        // ARRAY<DOUBLE> -> List(Float64)
+        assert_eq!(
+            DruidType::from_sql_type("ARRAY<DOUBLE>"),
+            DruidType::List(Box::new(DruidType::Float64))
+        );
+        // ARRAY<FLOAT> -> List(Float32)
+        assert_eq!(
+            DruidType::from_sql_type("ARRAY<FLOAT>"),
+            DruidType::List(Box::new(DruidType::Float32))
+        );
+    }
+
+    #[test]
+    fn test_druid_type_to_arrow_type_list() {
+        let list_int = DruidType::List(Box::new(DruidType::Int64));
+        assert_eq!(
+            list_int.to_arrow_type(),
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true)))
+        );
+
+        let list_str = DruidType::List(Box::new(DruidType::String));
+        assert_eq!(
+            list_str.to_arrow_type(),
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
+        );
+    }
+
+    #[test]
+    fn test_build_list_int64_array() {
+        let values = [
+            serde_json::json!([1, 2, 3]),
+            serde_json::json!(null),
+            serde_json::json!([4, 5]),
+        ];
+        let list_type = DruidType::List(Box::new(DruidType::Int64));
+        let array = list_type.build_array(values.iter().map(Some));
+
+        assert_eq!(array.len(), 3);
+        assert!(!array.is_null(0));
+        assert!(array.is_null(1));
+        assert!(!array.is_null(2));
+
+        let list_array = array
+            .as_any()
+            .downcast_ref::<arrow_array::ListArray>()
+            .expect("should be a ListArray");
+
+        // First element: [1, 2, 3]
+        let first = list_array.value(0);
+        let first_ints = first
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(first_ints.len(), 3);
+        assert_eq!(first_ints.value(0), 1);
+        assert_eq!(first_ints.value(1), 2);
+        assert_eq!(first_ints.value(2), 3);
+
+        // Third element: [4, 5]
+        let third = list_array.value(2);
+        let third_ints = third
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(third_ints.len(), 2);
+        assert_eq!(third_ints.value(0), 4);
+        assert_eq!(third_ints.value(1), 5);
+    }
+
+    #[test]
+    fn test_build_list_string_array() {
+        let values = [serde_json::json!(["a", "b", "c"]), serde_json::json!(["d"])];
+        let list_type = DruidType::List(Box::new(DruidType::String));
+        let array = list_type.build_array(values.iter().map(Some));
+
+        assert_eq!(array.len(), 2);
+
+        let list_array = array
+            .as_any()
+            .downcast_ref::<arrow_array::ListArray>()
+            .expect("should be a ListArray");
+
+        let first = list_array.value(0);
+        let first_strs = first.as_string::<i32>();
+        assert_eq!(first_strs.len(), 3);
+        assert_eq!(first_strs.value(0), "a");
+        assert_eq!(first_strs.value(1), "b");
+        assert_eq!(first_strs.value(2), "c");
+    }
+
+    #[test]
+    fn test_rows_to_record_batch_with_array_columns() {
+        // Simulates a response with both typesHeader and sqlTypesHeader enabled:
+        // row 0 = column names
+        // row 1 = native Druid types
+        // row 2 = SQL types
+        // rows 3+ = data
+        let rows = vec![
+            vec![serde_json::json!("name"), serde_json::json!("scores")],
+            vec![
+                serde_json::json!("STRING"),
+                serde_json::json!("ARRAY<LONG>"),
+            ],
+            vec![serde_json::json!("VARCHAR"), serde_json::json!("ARRAY")],
+            vec![serde_json::json!("Alice"), serde_json::json!([90, 85, 92])],
+        ];
+        let result = DruidClient::rows_to_record_batch(&rows);
+        assert!(result.is_ok());
+        let batch = result.unwrap();
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.num_columns(), 2);
+
+        // First column should be Utf8
+        assert_eq!(batch.schema().field(0).data_type(), &DataType::Utf8);
+
+        // Second column should be List<Int64>
+        assert_eq!(
+            batch.schema().field(1).data_type(),
+            &DataType::List(Arc::new(Field::new("item", DataType::Int64, true)))
+        );
+    }
+
+    #[test]
+    fn test_sql_request_includes_types_header() {
+        let json = serde_json::to_value(&make_sql_request("SELECT 1", vec![])).unwrap();
+        assert_eq!(json.get("typesHeader").unwrap(), true);
+        assert_eq!(json.get("sqlTypesHeader").unwrap(), true);
+        assert_eq!(json["context"]["sqlStringifyArrays"], false);
     }
 }

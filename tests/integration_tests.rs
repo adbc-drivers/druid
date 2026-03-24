@@ -302,3 +302,48 @@ fn test_bind_parameterized_query() {
         .as_primitive::<arrow_array::types::Int64Type>();
     assert_eq!(col.value(0), 42);
 }
+
+#[test]
+#[ignore]
+fn test_array_columns() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT ARRAY[1, 2, 3] AS int_arr, ARRAY['a', 'b'] AS str_arr")
+        .unwrap();
+    let reader = stmt.execute().unwrap();
+
+    let schema = reader.schema();
+    assert_eq!(schema.fields().len(), 2);
+
+    // Verify List types with correct element types
+    assert!(
+        matches!(schema.field(0).data_type(), arrow_schema::DataType::List(f) if *f.data_type() == arrow_schema::DataType::Int64),
+        "expected List<Int64>, got {:?}",
+        schema.field(0).data_type()
+    );
+    assert!(
+        matches!(schema.field(1).data_type(), arrow_schema::DataType::List(f) if *f.data_type() == arrow_schema::DataType::Utf8),
+        "expected List<Utf8>, got {:?}",
+        schema.field(1).data_type()
+    );
+
+    let batches: Vec<_> = reader.collect();
+    let batch = batches[0].as_ref().unwrap();
+    assert_eq!(batch.num_rows(), 1);
+
+    // Verify int array values [1, 2, 3]
+    let int_list = batch.column(0).as_list::<i32>();
+    let int_arr = int_list.value(0);
+    let int_values = int_arr.as_primitive::<arrow_array::types::Int64Type>();
+    assert_eq!(int_values.values(), &[1, 2, 3]);
+
+    // Verify string array values ["a", "b"]
+    let str_list = batch.column(1).as_list::<i32>();
+    let str_values = str_list.value(0);
+    let str_array = str_values
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .unwrap();
+    assert_eq!(str_array.value(0), "a");
+    assert_eq!(str_array.value(1), "b");
+}
