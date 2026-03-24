@@ -1,16 +1,23 @@
 use crate::batch_reader::SingleBatchReader;
-use crate::client::DruidClient;
+use crate::client::{DruidClient, SqlParameter};
 use adbc_core::error::{Error, Result, Status};
 use adbc_core::options::{OptionStatement, OptionValue};
 use adbc_core::{Optionable, PartitionedResult, Statement};
-use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_schema::Schema;
+use arrow_array::cast::AsArray;
+use arrow_array::types::{
+    Date32Type, Date64Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+};
+use arrow_array::{ArrayRef, RecordBatch, RecordBatchReader};
+use arrow_schema::{DataType, Schema, TimeUnit};
 use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct DruidStatement {
     client: Arc<DruidClient>,
     sql_query: Option<String>,
+    bind_data: Option<RecordBatch>,
 }
 
 impl DruidStatement {
@@ -19,6 +26,7 @@ impl DruidStatement {
         Self {
             client,
             sql_query: None,
+            bind_data: None,
         }
     }
 
@@ -30,14 +38,126 @@ impl DruidStatement {
             )
         })
     }
+
+    fn arrow_to_druid_type(data_type: &DataType) -> Result<&'static str> {
+        match data_type {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => Ok("BIGINT"),
+            DataType::Float32 => Ok("FLOAT"),
+            DataType::Float64 => Ok("DOUBLE"),
+            DataType::Boolean => Ok("BOOLEAN"),
+            DataType::Utf8 | DataType::LargeUtf8 => Ok("VARCHAR"),
+            DataType::Timestamp(_, _) => Ok("TIMESTAMP"),
+            DataType::Date32 | DataType::Date64 => Ok("DATE"),
+            _ => Err(Error::with_message_and_status(
+                format!("Unsupported Arrow type for Druid parameter: {data_type}"),
+                Status::InvalidArguments,
+            )),
+        }
+    }
+
+    fn extract_value(array: &ArrayRef, row: usize) -> Result<serde_json::Value> {
+        if array.is_null(row) {
+            return Ok(serde_json::Value::Null);
+        }
+
+        match array.data_type() {
+            DataType::Int8 => Ok(serde_json::json!(
+                array.as_primitive::<Int8Type>().value(row)
+            )),
+            DataType::Int16 => Ok(serde_json::json!(
+                array.as_primitive::<Int16Type>().value(row)
+            )),
+            DataType::Int32 => Ok(serde_json::json!(
+                array.as_primitive::<Int32Type>().value(row)
+            )),
+            DataType::Int64 => Ok(serde_json::json!(
+                array.as_primitive::<Int64Type>().value(row)
+            )),
+            DataType::UInt8 => Ok(serde_json::json!(
+                array.as_primitive::<UInt8Type>().value(row)
+            )),
+            DataType::UInt16 => Ok(serde_json::json!(
+                array.as_primitive::<UInt16Type>().value(row)
+            )),
+            DataType::UInt32 => Ok(serde_json::json!(
+                array.as_primitive::<UInt32Type>().value(row)
+            )),
+            DataType::UInt64 => Ok(serde_json::json!(
+                array.as_primitive::<UInt64Type>().value(row)
+            )),
+            DataType::Float32 => Ok(serde_json::json!(
+                array.as_primitive::<Float32Type>().value(row)
+            )),
+            DataType::Float64 => Ok(serde_json::json!(
+                array.as_primitive::<Float64Type>().value(row)
+            )),
+            DataType::Boolean => Ok(serde_json::json!(array.as_boolean().value(row))),
+            DataType::Utf8 => Ok(serde_json::json!(array.as_string::<i32>().value(row))),
+            DataType::LargeUtf8 => Ok(serde_json::json!(array.as_string::<i64>().value(row))),
+            DataType::Timestamp(TimeUnit::Second, _) => Ok(serde_json::json!(
+                array.as_primitive::<TimestampSecondType>().value(row)
+            )),
+            DataType::Timestamp(TimeUnit::Millisecond, _) => Ok(serde_json::json!(
+                array.as_primitive::<TimestampMillisecondType>().value(row)
+            )),
+            DataType::Timestamp(TimeUnit::Microsecond, _) => Ok(serde_json::json!(
+                array.as_primitive::<TimestampMicrosecondType>().value(row)
+            )),
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => Ok(serde_json::json!(
+                array.as_primitive::<TimestampNanosecondType>().value(row)
+            )),
+            DataType::Date32 => Ok(serde_json::json!(
+                array.as_primitive::<Date32Type>().value(row)
+            )),
+            DataType::Date64 => Ok(serde_json::json!(
+                array.as_primitive::<Date64Type>().value(row)
+            )),
+            dt => Err(Error::with_message_and_status(
+                format!("Unsupported Arrow type for Druid parameter value: {dt}"),
+                Status::InvalidArguments,
+            )),
+        }
+    }
+
+    fn build_parameters(batch: &RecordBatch) -> Result<Vec<SqlParameter>> {
+        batch
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, field)| {
+                Ok(SqlParameter {
+                    sql_type: Self::arrow_to_druid_type(field.data_type())?.to_string(),
+                    value: Self::extract_value(batch.column(i), 0)?,
+                })
+            })
+            .collect()
+    }
+
+    fn take_parameters(&mut self) -> Result<Vec<SqlParameter>> {
+        self.bind_data
+            .take()
+            .map_or_else(|| Ok(vec![]), |batch| Self::build_parameters(&batch))
+    }
 }
 
 impl Statement for DruidStatement {
-    fn bind(&mut self, _batch: RecordBatch) -> Result<()> {
-        Err(Error::with_message_and_status(
-            "bind not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+    fn bind(&mut self, batch: RecordBatch) -> Result<()> {
+        if batch.num_rows() != 1 {
+            return Err(Error::with_message_and_status(
+                format!("bind expects exactly 1 row, got {}", batch.num_rows()),
+                Status::InvalidArguments,
+            ));
+        }
+        self.bind_data = Some(batch);
+        Ok(())
     }
 
     fn bind_stream(&mut self, _reader: Box<dyn RecordBatchReader + Send>) -> Result<()> {
@@ -48,14 +168,16 @@ impl Statement for DruidStatement {
     }
 
     fn execute(&mut self) -> Result<impl RecordBatchReader + Send> {
-        let batch = self.client.execute_query(self.query()?)?;
+        let params = self.take_parameters()?;
+        let batch = self.client.execute_query(self.query()?, params)?;
         Ok(SingleBatchReader::new(batch))
     }
 
     fn execute_update(&mut self) -> Result<Option<i64>> {
+        let params = self.take_parameters()?;
         // Execute the query and discard the result batch. Druid's SQL API
         // doesn't return affected row counts for DML/DDL statements.
-        let _result = self.client.execute_query(self.query()?)?;
+        let _result = self.client.execute_query(self.query()?, params)?;
         Ok(None)
     }
 
@@ -149,9 +271,21 @@ impl Optionable for DruidStatement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::builder::{Float64Builder, Int64Builder, StringBuilder};
+    use arrow_schema::{DataType, Field};
 
     fn create_test_client() -> Arc<DruidClient> {
         Arc::new(DruidClient::new("http://localhost:8888").unwrap())
+    }
+
+    fn make_batch(values: Vec<(&str, ArrayRef)>) -> RecordBatch {
+        let fields: Vec<Field> = values
+            .iter()
+            .map(|(name, arr)| Field::new(*name, arr.data_type().clone(), true))
+            .collect();
+        let schema = Arc::new(Schema::new(fields));
+        let arrays: Vec<ArrayRef> = values.into_iter().map(|(_, arr)| arr).collect();
+        RecordBatch::try_new(schema, arrays).unwrap()
     }
 
     #[test]
@@ -177,5 +311,135 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.status, Status::InvalidState);
+    }
+
+    #[test]
+    fn test_bind_stores_data() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let mut builder = Int64Builder::new();
+        builder.append_value(42);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("param", array)]);
+
+        let result = stmt.bind(batch);
+        assert!(result.is_ok());
+        assert!(stmt.bind_data.is_some());
+    }
+
+    #[test]
+    fn test_bind_rejects_multiple_rows() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let mut builder = Int64Builder::new();
+        builder.append_value(1);
+        builder.append_value(2);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("param", array)]);
+
+        let result = stmt.bind(batch);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::InvalidArguments);
+    }
+
+    #[test]
+    fn test_bind_rejects_zero_rows() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let batch = RecordBatch::new_empty(schema);
+
+        let result = stmt.bind(batch);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::InvalidArguments);
+    }
+
+    #[test]
+    fn test_bind_replaces_previous() {
+        let mut stmt = DruidStatement::new(create_test_client());
+
+        let mut builder = Int64Builder::new();
+        builder.append_value(1);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch1 = make_batch(vec![("param", array)]);
+        stmt.bind(batch1).unwrap();
+
+        let mut builder = Int64Builder::new();
+        builder.append_value(2);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch2 = make_batch(vec![("param", array)]);
+        stmt.bind(batch2).unwrap();
+
+        assert!(stmt.bind_data.is_some());
+        assert_eq!(stmt.bind_data.as_ref().unwrap().num_columns(), 1);
+    }
+
+    #[test]
+    fn test_build_parameters_int64() {
+        let mut builder = Int64Builder::new();
+        builder.append_value(42);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("p", array)]);
+
+        let params = DruidStatement::build_parameters(&batch).unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].sql_type, "BIGINT");
+        assert_eq!(params[0].value, serde_json::json!(42));
+    }
+
+    #[test]
+    fn test_build_parameters_float64() {
+        let mut builder = Float64Builder::new();
+        builder.append_value(3.14);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("p", array)]);
+
+        let params = DruidStatement::build_parameters(&batch).unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].sql_type, "DOUBLE");
+        assert_eq!(params[0].value, serde_json::json!(3.14));
+    }
+
+    #[test]
+    fn test_build_parameters_string() {
+        let mut builder = StringBuilder::new();
+        builder.append_value("hello");
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("p", array)]);
+
+        let params = DruidStatement::build_parameters(&batch).unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].sql_type, "VARCHAR");
+        assert_eq!(params[0].value, serde_json::json!("hello"));
+    }
+
+    #[test]
+    fn test_build_parameters_null_value() {
+        let mut builder = Int64Builder::new();
+        builder.append_null();
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("p", array)]);
+
+        let params = DruidStatement::build_parameters(&batch).unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].sql_type, "BIGINT");
+        assert!(params[0].value.is_null());
+    }
+
+    #[test]
+    fn test_build_parameters_multiple_columns() {
+        let mut int_builder = Int64Builder::new();
+        int_builder.append_value(42);
+        let int_array: ArrayRef = Arc::new(int_builder.finish());
+
+        let mut str_builder = StringBuilder::new();
+        str_builder.append_value("test");
+        let str_array: ArrayRef = Arc::new(str_builder.finish());
+
+        let batch = make_batch(vec![("a", int_array), ("b", str_array)]);
+
+        let params = DruidStatement::build_parameters(&batch).unwrap();
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].sql_type, "BIGINT");
+        assert_eq!(params[0].value, serde_json::json!(42));
+        assert_eq!(params[1].sql_type, "VARCHAR");
+        assert_eq!(params[1].value, serde_json::json!("test"));
     }
 }

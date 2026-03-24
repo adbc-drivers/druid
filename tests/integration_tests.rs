@@ -6,6 +6,7 @@
 
 use adbc_core::options::{OptionDatabase, OptionValue};
 use adbc_core::{Connection, Database, Driver, Optionable, Statement};
+use arrow_array::RecordBatch;
 use arrow_array::RecordBatchReader;
 use arrow_array::cast::AsArray;
 use druid_driver::{DruidConnection, DruidDriver};
@@ -268,4 +269,36 @@ fn test_timestamp_column() {
         .unwrap();
     // Wikipedia data is from 2015, so timestamp should be > 0
     assert!(time_col.value(0) > 0);
+}
+
+#[test]
+#[ignore]
+fn test_bind_parameterized_query() {
+    let mut conn = get_connection();
+    let mut stmt = conn.new_statement().unwrap();
+    stmt.set_sql_query("SELECT ? + 1 AS the_answer").unwrap();
+
+    let mut builder = arrow_array::builder::Int64Builder::new();
+    builder.append_value(41);
+    let array: arrow_array::ArrayRef = std::sync::Arc::new(builder.finish());
+    let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+        "p",
+        arrow_schema::DataType::Int64,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+    stmt.bind(batch).unwrap();
+    let reader = stmt.execute().unwrap();
+
+    let batches: Vec<_> = reader.collect();
+    assert_eq!(batches.len(), 1);
+
+    let result_batch = batches[0].as_ref().unwrap();
+    assert_eq!(result_batch.num_rows(), 1);
+
+    let col = result_batch
+        .column(0)
+        .as_primitive::<arrow_array::types::Int64Type>();
+    assert_eq!(col.value(0), 42);
 }

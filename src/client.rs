@@ -138,6 +138,13 @@ impl DruidType {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct SqlParameter {
+    #[serde(rename = "type")]
+    pub sql_type: String,
+    pub value: serde_json::Value,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SqlRequest {
@@ -145,6 +152,8 @@ struct SqlRequest {
     result_format: String,
     header: bool,
     sql_types_header: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    parameters: Vec<SqlParameter>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -209,7 +218,11 @@ impl DruidClient {
         })
     }
 
-    pub fn execute_query(&self, query: &str) -> Result<RecordBatch> {
+    pub(crate) fn execute_query(
+        &self,
+        query: &str,
+        parameters: Vec<SqlParameter>,
+    ) -> Result<RecordBatch> {
         let url = format!("{}/druid/v2/sql", self.base_url);
 
         let request = SqlRequest {
@@ -217,6 +230,7 @@ impl DruidClient {
             result_format: "array".to_string(),
             header: true,
             sql_types_header: true,
+            parameters,
         };
 
         let response = self.client.post(&url).json(&request).send().map_err(|e| {
@@ -395,5 +409,37 @@ mod tests {
         assert_eq!(array.len(), 2);
         assert!(!array.is_null(0));
         assert!(array.is_null(1));
+    }
+
+    #[test]
+    fn test_sql_request_serializes_with_parameters() {
+        let request = SqlRequest {
+            query: "SELECT ? + 1".to_string(),
+            result_format: "array".to_string(),
+            header: true,
+            sql_types_header: true,
+            parameters: vec![SqlParameter {
+                sql_type: "BIGINT".to_string(),
+                value: serde_json::json!(41),
+            }],
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        let params = json.get("parameters").unwrap().as_array().unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0]["type"], "BIGINT");
+        assert_eq!(params[0]["value"], 41);
+    }
+
+    #[test]
+    fn test_sql_request_omits_empty_parameters() {
+        let request = SqlRequest {
+            query: "SELECT 1".to_string(),
+            result_format: "array".to_string(),
+            header: true,
+            sql_types_header: true,
+            parameters: vec![],
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(json.get("parameters").is_none());
     }
 }
