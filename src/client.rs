@@ -1,6 +1,7 @@
 use adbc_core::error::{Error, Result, Status};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -302,8 +303,17 @@ impl DruidClient {
         &self,
         query: &str,
         parameters: Vec<SqlParameter>,
+        user_context: HashMap<String, serde_json::Value>,
     ) -> Result<RecordBatch> {
         let url = format!("{}/druid/v2/sql", self.base_url);
+
+        // Build context: start with user context, then ensure sqlStringifyArrays is false
+        // (the driver requires this for proper array handling)
+        let mut context = user_context;
+        context.insert(
+            "sqlStringifyArrays".to_string(),
+            serde_json::Value::Bool(false),
+        );
 
         let request = SqlRequest {
             query: query.to_string(),
@@ -311,7 +321,7 @@ impl DruidClient {
             header: true,
             types_header: true,
             sql_types_header: true,
-            context: serde_json::json!({ "sqlStringifyArrays": false }),
+            context: serde_json::json!(context),
             parameters,
         };
 

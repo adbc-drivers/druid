@@ -12,6 +12,7 @@ use arrow_array::types::{
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchReader};
 use arrow_schema::{DataType, Schema, TimeUnit};
 use arrow_select::concat::concat_batches;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -19,6 +20,7 @@ pub struct DruidStatement {
     client: Arc<DruidClient>,
     sql_query: Option<String>,
     bind_data: Option<RecordBatch>,
+    context: HashMap<String, OptionValue>,
 }
 
 impl DruidStatement {
@@ -28,6 +30,7 @@ impl DruidStatement {
             client,
             sql_query: None,
             bind_data: None,
+            context: HashMap::new(),
         }
     }
 
@@ -154,6 +157,39 @@ impl DruidStatement {
         // Druid requires subqueries to have an alias
         Ok(format!("SELECT * FROM ({query}) AS __schema_query LIMIT 0"))
     }
+
+    fn build_context(&self) -> HashMap<String, serde_json::Value> {
+        self.context
+            .iter()
+            .filter_map(|(k, v)| Self::option_value_to_json(v).map(|v| (k.clone(), v)))
+            .collect()
+    }
+
+    fn option_value_to_json(value: &OptionValue) -> Option<serde_json::Value> {
+        match value {
+            OptionValue::String(s) => Some(serde_json::Value::String(s.clone())),
+            OptionValue::Int(i) => Some(serde_json::json!(*i)),
+            OptionValue::Double(d) => Some(serde_json::json!(*d)),
+            _ => None, // Bytes not supported; wildcard for #[non_exhaustive]
+        }
+    }
+
+    /// Returns the stored option value for a given key, or an error if not found
+    /// or if the key is a standard ADBC option (which Druid doesn't support).
+    fn get_context_value(&self, key: &OptionStatement) -> Result<&OptionValue> {
+        match key {
+            OptionStatement::Other(name) => self.context.get(name).ok_or_else(|| {
+                Error::with_message_and_status(
+                    format!("Option '{name}' not found"),
+                    Status::NotFound,
+                )
+            }),
+            _ => Err(Error::with_message_and_status(
+                format!("Option {key:?} is not supported by Druid driver"),
+                Status::NotImplemented,
+            )),
+        }
+    }
 }
 
 impl Statement for DruidStatement {
@@ -214,21 +250,24 @@ impl Statement for DruidStatement {
 
     fn execute(&mut self) -> Result<impl RecordBatchReader + Send> {
         let params = self.take_parameters()?;
-        let batch = self.client.execute_query(self.query()?, params)?;
+        let context = self.build_context();
+        let batch = self.client.execute_query(self.query()?, params, context)?;
         Ok(SingleBatchReader::new(batch))
     }
 
     fn execute_update(&mut self) -> Result<Option<i64>> {
         let params = self.take_parameters()?;
+        let context = self.build_context();
         // Execute the query and discard the result batch. Druid's SQL API
         // doesn't return affected row counts for DML/DDL statements.
-        let _result = self.client.execute_query(self.query()?, params)?;
+        let _result = self.client.execute_query(self.query()?, params, context)?;
         Ok(None)
     }
 
     fn execute_schema(&mut self) -> Result<Schema> {
         let schema_query = self.build_schema_query()?;
-        let batch = self.client.execute_query(&schema_query, vec![])?;
+        let context = self.build_context();
+        let batch = self.client.execute_query(&schema_query, vec![], context)?;
         Ok(batch.schema().as_ref().clone())
     }
 
@@ -276,39 +315,60 @@ impl Statement for DruidStatement {
 impl Optionable for DruidStatement {
     type Option = OptionStatement;
 
-    fn set_option(&mut self, _key: Self::Option, _value: OptionValue) -> Result<()> {
-        Err(Error::with_message_and_status(
-            "set_option not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+    fn set_option(&mut self, key: Self::Option, value: OptionValue) -> Result<()> {
+        match key {
+            OptionStatement::Other(name) => {
+                if matches!(value, OptionValue::Bytes(_)) {
+                    return Err(Error::with_message_and_status(
+                        "Druid context does not support bytes values".to_string(),
+                        Status::NotImplemented,
+                    ));
+                }
+                self.context.insert(name, value);
+                Ok(())
+            }
+            _ => Err(Error::with_message_and_status(
+                format!("Option {key:?} is not supported by Druid driver"),
+                Status::NotImplemented,
+            )),
+        }
     }
 
-    fn get_option_string(&self, _key: Self::Option) -> Result<String> {
-        Err(Error::with_message_and_status(
-            "get_option_string not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+    fn get_option_string(&self, key: Self::Option) -> Result<String> {
+        match self.get_context_value(&key)? {
+            OptionValue::String(s) => Ok(s.clone()),
+            _ => Err(Error::with_message_and_status(
+                format!("Option {key:?} is not a string"),
+                Status::InvalidArguments,
+            )),
+        }
     }
 
     fn get_option_bytes(&self, _key: Self::Option) -> Result<Vec<u8>> {
         Err(Error::with_message_and_status(
-            "get_option_bytes not implemented".to_string(),
+            "Druid context does not support bytes values".to_string(),
             Status::NotImplemented,
         ))
     }
 
-    fn get_option_int(&self, _key: Self::Option) -> Result<i64> {
-        Err(Error::with_message_and_status(
-            "get_option_int not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+    fn get_option_int(&self, key: Self::Option) -> Result<i64> {
+        match self.get_context_value(&key)? {
+            OptionValue::Int(i) => Ok(*i),
+            _ => Err(Error::with_message_and_status(
+                format!("Option {key:?} is not an integer"),
+                Status::InvalidArguments,
+            )),
+        }
     }
 
-    fn get_option_double(&self, _key: Self::Option) -> Result<f64> {
-        Err(Error::with_message_and_status(
-            "get_option_double not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+    fn get_option_double(&self, key: Self::Option) -> Result<f64> {
+        match self.get_context_value(&key)? {
+            OptionValue::Double(d) => Ok(*d),
+            _ => Err(Error::with_message_and_status(
+                format!("Option {key:?} is not a double"),
+                Status::InvalidArguments,
+            )),
+        }
     }
 }
 
@@ -318,6 +378,171 @@ mod tests {
     use crate::batch_reader::SingleBatchReader;
     use arrow_array::builder::{Float64Builder, Int64Builder, StringBuilder};
     use arrow_schema::{ArrowError, DataType, Field, SchemaRef};
+
+    // ========== Optionable tests ==========
+
+    #[test]
+    fn test_set_option_stores_string_value() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let result = stmt.set_option(
+            OptionStatement::Other("sqlTimeZone".to_string()),
+            OptionValue::String("America/New_York".to_string()),
+        );
+        assert!(result.is_ok());
+
+        let retrieved = stmt.get_option_string(OptionStatement::Other("sqlTimeZone".to_string()));
+        assert!(retrieved.is_ok());
+        assert_eq!(retrieved.unwrap(), "America/New_York");
+    }
+
+    #[test]
+    fn test_set_option_stores_int_value() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let result = stmt.set_option(
+            OptionStatement::Other("timeout".to_string()),
+            OptionValue::Int(30000),
+        );
+        assert!(result.is_ok());
+
+        let retrieved = stmt.get_option_int(OptionStatement::Other("timeout".to_string()));
+        assert!(retrieved.is_ok());
+        assert_eq!(retrieved.unwrap(), 30000);
+    }
+
+    #[test]
+    fn test_set_option_stores_double_value() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let result = stmt.set_option(
+            OptionStatement::Other("someDouble".to_string()),
+            OptionValue::Double(3.14),
+        );
+        assert!(result.is_ok());
+
+        let retrieved = stmt.get_option_double(OptionStatement::Other("someDouble".to_string()));
+        assert!(retrieved.is_ok());
+        assert!((retrieved.unwrap() - 3.14).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_set_option_bytes_returns_not_implemented() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let result = stmt.set_option(
+            OptionStatement::Other("someBytes".to_string()),
+            OptionValue::Bytes(vec![1, 2, 3]),
+        );
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::NotImplemented);
+    }
+
+    #[test]
+    fn test_set_option_standard_options_return_not_implemented() {
+        let mut stmt = DruidStatement::new(create_test_client());
+
+        // IngestMode is not applicable to Druid
+        let result = stmt.set_option(
+            OptionStatement::IngestMode,
+            OptionValue::String("create".to_string()),
+        );
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::NotImplemented);
+
+        // TargetTable is not applicable to Druid
+        let result = stmt.set_option(
+            OptionStatement::TargetTable,
+            OptionValue::String("my_table".to_string()),
+        );
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::NotImplemented);
+    }
+
+    #[test]
+    fn test_get_option_string_wrong_type_returns_error() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        stmt.set_option(
+            OptionStatement::Other("timeout".to_string()),
+            OptionValue::Int(30000),
+        )
+        .unwrap();
+
+        let result = stmt.get_option_string(OptionStatement::Other("timeout".to_string()));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::InvalidArguments);
+    }
+
+    #[test]
+    fn test_get_option_not_found_returns_error() {
+        let stmt = DruidStatement::new(create_test_client());
+        let result = stmt.get_option_string(OptionStatement::Other("nonexistent".to_string()));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::NotFound);
+    }
+
+    #[test]
+    fn test_set_option_replaces_existing() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        stmt.set_option(
+            OptionStatement::Other("timeout".to_string()),
+            OptionValue::Int(1000),
+        )
+        .unwrap();
+        stmt.set_option(
+            OptionStatement::Other("timeout".to_string()),
+            OptionValue::Int(2000),
+        )
+        .unwrap();
+
+        let retrieved = stmt.get_option_int(OptionStatement::Other("timeout".to_string()));
+        assert_eq!(retrieved.unwrap(), 2000);
+    }
+
+    #[test]
+    fn test_get_option_bytes_returns_not_implemented() {
+        let stmt = DruidStatement::new(create_test_client());
+        let result = stmt.get_option_bytes(OptionStatement::Other("anything".to_string()));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::NotImplemented);
+    }
+
+    #[test]
+    fn test_get_option_standard_options_return_not_implemented() {
+        let stmt = DruidStatement::new(create_test_client());
+
+        let result = stmt.get_option_string(OptionStatement::IngestMode);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::NotImplemented);
+    }
+
+    #[test]
+    fn test_build_context_converts_to_json() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        stmt.set_option(
+            OptionStatement::Other("sqlTimeZone".to_string()),
+            OptionValue::String("America/New_York".to_string()),
+        )
+        .unwrap();
+        stmt.set_option(
+            OptionStatement::Other("timeout".to_string()),
+            OptionValue::Int(30000),
+        )
+        .unwrap();
+        stmt.set_option(
+            OptionStatement::Other("someDouble".to_string()),
+            OptionValue::Double(1.5),
+        )
+        .unwrap();
+
+        let context = stmt.build_context();
+
+        assert_eq!(context.len(), 3);
+        assert_eq!(
+            context.get("sqlTimeZone"),
+            Some(&serde_json::json!("America/New_York"))
+        );
+        assert_eq!(context.get("timeout"), Some(&serde_json::json!(30000)));
+        assert_eq!(context.get("someDouble"), Some(&serde_json::json!(1.5)));
+    }
+
+    // ========== End Optionable tests ==========
 
     fn create_test_client() -> Arc<DruidClient> {
         Arc::new(DruidClient::new("http://localhost:8888").unwrap())
