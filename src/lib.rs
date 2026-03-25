@@ -3,6 +3,7 @@ mod client;
 pub mod connection;
 pub mod database;
 pub mod driver;
+mod parameters;
 pub mod statement;
 
 pub use connection::DruidConnection;
