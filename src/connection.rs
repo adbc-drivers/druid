@@ -1,5 +1,5 @@
 use crate::batch_reader::SingleBatchReader;
-use crate::client::DruidClient;
+use crate::client::{DruidClient, DruidType, SqlParameter};
 use crate::info::GetInfoBuilder;
 use crate::statement::DruidStatement;
 use adbc_core::constants::ADBC_VERSION_1_1_0;
@@ -8,9 +8,10 @@ use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionValue};
 use adbc_core::schemas::GET_TABLE_TYPES_SCHEMA;
 use adbc_core::{Connection, Optionable};
 use arrow_array::builder::StringBuilder;
+use arrow_array::cast::AsArray;
 use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_schema::Schema;
-use std::collections::HashSet;
+use arrow_schema::{Field, Schema};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// The set of info codes supported by this driver.
@@ -115,14 +116,58 @@ impl Connection for DruidConnection {
 
     fn get_table_schema(
         &self,
-        _catalog: Option<&str>,
-        _db_schema: Option<&str>,
-        _table_name: &str,
+        catalog: Option<&str>,
+        db_schema: Option<&str>,
+        table_name: &str,
     ) -> Result<Schema> {
-        Err(Error::with_message_and_status(
-            "get_table_schema not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+        // Druid only supports "druid" catalog
+        if catalog.is_some_and(|c| !c.eq_ignore_ascii_case("druid")) {
+            return Err(Error::with_message_and_status(
+                format!(
+                    "Invalid catalog '{}'. Druid only supports 'druid' catalog.",
+                    catalog.unwrap()
+                ),
+                Status::InvalidArguments,
+            ));
+        }
+
+        if table_name.is_empty() {
+            return Err(Error::with_message_and_status(
+                "Table name cannot be empty".to_string(),
+                Status::InvalidArguments,
+            ));
+        }
+
+        let schema_name = db_schema.unwrap_or("druid");
+
+        let batch = self.client.execute_query(
+            "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS \
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+            vec![
+                SqlParameter::varchar(schema_name),
+                SqlParameter::varchar(table_name),
+            ],
+            HashMap::new(),
+        )?;
+
+        if batch.num_rows() == 0 {
+            return Err(Error::with_message_and_status(
+                format!("Table '{schema_name}.{table_name}' not found"),
+                Status::NotFound,
+            ));
+        }
+
+        let names = batch.column(0).as_string::<i32>();
+        let types = batch.column(1).as_string::<i32>();
+
+        let fields: Vec<_> = (0..batch.num_rows())
+            .map(|i| {
+                let arrow_type = DruidType::from_sql_type(types.value(i)).to_arrow_type();
+                Field::new(names.value(i), arrow_type, true)
+            })
+            .collect();
+
+        Ok(Schema::new(fields))
     }
 
     fn get_table_types(&self) -> Result<impl RecordBatchReader + Send> {
@@ -256,5 +301,19 @@ mod tests {
 
         assert!(types.contains(&"TABLE"));
         assert!(types.contains(&"SYSTEM TABLE"));
+    }
+
+    #[test]
+    fn test_get_table_schema_invalid_catalog_returns_error() {
+        let conn = DruidConnection::new("http://localhost:8888").unwrap();
+        let result = conn.get_table_schema(Some("invalid_catalog"), Some("druid"), "wikipedia");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_table_schema_empty_table_name_returns_error() {
+        let conn = DruidConnection::new("http://localhost:8888").unwrap();
+        let result = conn.get_table_schema(None, Some("druid"), "");
+        assert!(result.is_err());
     }
 }

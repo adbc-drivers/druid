@@ -16,7 +16,7 @@ use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
 /// Maps Druid SQL types to Arrow types and handles array construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum DruidType {
+pub(crate) enum DruidType {
     Int64,
     Float32,
     Float64,
@@ -29,7 +29,7 @@ enum DruidType {
 
 impl DruidType {
     /// Parse a Druid/SQL type string into a `DruidType`.
-    fn from_sql_type(s: &str) -> Self {
+    pub(crate) fn from_sql_type(s: &str) -> Self {
         let upper = s.to_uppercase();
         // Handle parameterized ARRAY types like ARRAY<LONG>, ARRAY<STRING>
         if let Some(inner) = upper
@@ -59,7 +59,7 @@ impl DruidType {
     }
 
     /// Convert to the corresponding Arrow `DataType`.
-    fn to_arrow_type(&self) -> DataType {
+    pub(crate) fn to_arrow_type(&self) -> DataType {
         match self {
             Self::Int64 => DataType::Int64,
             Self::Float32 => DataType::Float32,
@@ -222,6 +222,16 @@ pub(crate) struct SqlParameter {
     #[serde(rename = "type")]
     pub sql_type: String,
     pub value: serde_json::Value,
+}
+
+impl SqlParameter {
+    /// Creates a VARCHAR parameter.
+    pub fn varchar(value: impl Into<String>) -> Self {
+        Self {
+            sql_type: "VARCHAR".to_string(),
+            value: serde_json::Value::String(value.into()),
+        }
+    }
 }
 
 #[derive(Serialize)]

@@ -583,3 +583,64 @@ fn test_get_table_types() {
     assert!(types.contains(&"TABLE"));
     assert!(types.contains(&"SYSTEM TABLE"));
 }
+
+#[test]
+#[ignore]
+fn test_get_table_schema_wikipedia() {
+    let conn = get_connection();
+    let schema = conn
+        .get_table_schema(None, Some("druid"), "wikipedia")
+        .unwrap();
+
+    // Wikipedia table should have at least these columns
+    let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+
+    assert!(field_names.contains(&"__time"), "Should have __time column");
+    assert!(
+        field_names.contains(&"channel"),
+        "Should have channel column"
+    );
+    assert!(field_names.contains(&"page"), "Should have page column");
+
+    // Verify types
+    let time_field = schema.field_with_name("__time").unwrap();
+    assert_eq!(
+        time_field.data_type(),
+        &arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
+        "__time should be Timestamp"
+    );
+
+    let channel_field = schema.field_with_name("channel").unwrap();
+    assert_eq!(
+        channel_field.data_type(),
+        &arrow_schema::DataType::Utf8,
+        "channel should be Utf8"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_get_table_schema_nonexistent_table() {
+    let conn = get_connection();
+    let result = conn.get_table_schema(None, Some("druid"), "nonexistent_table_12345");
+    assert!(result.is_err(), "Should return error for nonexistent table");
+}
+
+#[test]
+#[ignore]
+fn test_get_table_schema_with_druid_catalog() {
+    let conn = get_connection();
+    // Druid uses "druid" as the only catalog
+    let schema = conn
+        .get_table_schema(Some("druid"), Some("druid"), "wikipedia")
+        .unwrap();
+    assert!(!schema.fields().is_empty(), "Schema should have fields");
+}
+
+#[test]
+#[ignore]
+fn test_get_table_schema_invalid_catalog() {
+    let conn = get_connection();
+    let result = conn.get_table_schema(Some("invalid_catalog"), Some("druid"), "wikipedia");
+    assert!(result.is_err(), "Should return error for invalid catalog");
+}
