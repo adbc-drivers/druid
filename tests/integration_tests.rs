@@ -6,6 +6,7 @@
 
 use adbc_core::options::{InfoCode, OptionDatabase, OptionValue};
 use adbc_core::{Connection, Database, Driver, Optionable, Statement};
+use arrow_array::Array;
 use arrow_array::RecordBatch;
 use arrow_array::RecordBatchReader;
 use arrow_array::cast::AsArray;
@@ -565,4 +566,20 @@ fn test_get_info_ignores_unsupported_codes() {
 
     // Should return empty batch (no rows)
     assert_eq!(batch.num_rows(), 0);
+}
+
+#[test]
+#[ignore]
+fn test_get_table_types() {
+    let conn = get_connection();
+    let mut reader = conn.get_table_types().unwrap();
+
+    let batch = reader.next().unwrap().unwrap();
+    assert_eq!(batch.num_rows(), 2);
+
+    let col = batch.column(0).as_string::<i32>();
+    let types: Vec<&str> = (0..col.len()).map(|i| col.value(i)).collect();
+
+    assert!(types.contains(&"TABLE"));
+    assert!(types.contains(&"SYSTEM TABLE"));
 }

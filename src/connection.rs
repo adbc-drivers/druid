@@ -5,8 +5,10 @@ use crate::statement::DruidStatement;
 use adbc_core::constants::ADBC_VERSION_1_1_0;
 use adbc_core::error::{Error, Result, Status};
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionValue};
+use adbc_core::schemas::GET_TABLE_TYPES_SCHEMA;
 use adbc_core::{Connection, Optionable};
-use arrow_array::RecordBatchReader;
+use arrow_array::builder::StringBuilder;
+use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::Schema;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -25,6 +27,9 @@ const SUPPORTED_INFO_CODES: &[InfoCode] = &[
 
 /// Arrow library version used by this driver.
 const ARROW_VERSION: &str = "57";
+
+/// Table types supported by Druid.
+const SUPPORTED_TABLE_TYPES: &[&str] = &["TABLE", "SYSTEM TABLE"];
 
 #[derive(Debug)]
 pub struct DruidConnection {
@@ -121,10 +126,23 @@ impl Connection for DruidConnection {
     }
 
     fn get_table_types(&self) -> Result<impl RecordBatchReader + Send> {
-        Err::<SingleBatchReader, Error>(Error::with_message_and_status(
-            "get_table_types not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+        let mut builder = StringBuilder::new();
+        for table_type in SUPPORTED_TABLE_TYPES {
+            builder.append_value(table_type);
+        }
+
+        let batch = RecordBatch::try_new(
+            GET_TABLE_TYPES_SCHEMA.clone(),
+            vec![Arc::new(builder.finish())],
+        )
+        .map_err(|e| {
+            Error::with_message_and_status(
+                format!("Failed to create RecordBatch: {e}"),
+                Status::Internal,
+            )
+        })?;
+
+        Ok(SingleBatchReader::new(batch))
     }
 
     fn get_statistic_names(&self) -> Result<impl RecordBatchReader + Send> {
@@ -208,5 +226,35 @@ impl Optionable for DruidConnection {
             "get_option_double not implemented".to_string(),
             Status::NotImplemented,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::Array;
+    use arrow_array::cast::AsArray;
+
+    #[test]
+    fn test_get_table_types_returns_correct_schema() {
+        let conn = DruidConnection::new("http://localhost:8888").unwrap();
+        let reader = conn.get_table_types().unwrap();
+
+        assert_eq!(reader.schema(), GET_TABLE_TYPES_SCHEMA.clone());
+    }
+
+    #[test]
+    fn test_get_table_types_returns_table_and_system_table() {
+        let conn = DruidConnection::new("http://localhost:8888").unwrap();
+        let mut reader = conn.get_table_types().unwrap();
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(batch.num_rows(), 2);
+
+        let col = batch.column(0).as_string::<i32>();
+        let types: Vec<&str> = (0..col.len()).map(|i| col.value(i)).collect();
+
+        assert!(types.contains(&"TABLE"));
+        assert!(types.contains(&"SYSTEM TABLE"));
     }
 }
