@@ -11,6 +11,7 @@ use arrow_array::types::{
 };
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchReader};
 use arrow_schema::{DataType, Schema, TimeUnit};
+use arrow_select::concat::concat_batches;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -167,11 +168,48 @@ impl Statement for DruidStatement {
         Ok(())
     }
 
-    fn bind_stream(&mut self, _reader: Box<dyn RecordBatchReader + Send>) -> Result<()> {
-        Err(Error::with_message_and_status(
-            "bind_stream not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+    fn bind_stream(&mut self, reader: Box<dyn RecordBatchReader + Send>) -> Result<()> {
+        let schema = reader.schema();
+
+        // Collect all batches from the stream
+        let batches: Vec<RecordBatch> = reader
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| {
+                Error::with_message_and_status(
+                    format!("Failed to read from stream: {e}"),
+                    Status::IO,
+                )
+            })?;
+
+        // Handle empty stream (no batches at all)
+        if batches.is_empty() {
+            return Err(Error::with_message_and_status(
+                "bind_stream received empty stream".to_string(),
+                Status::InvalidArguments,
+            ));
+        }
+
+        // Concatenate all batches into a single RecordBatch
+        let concatenated = concat_batches(&schema, &batches).map_err(|e| {
+            Error::with_message_and_status(
+                format!("Failed to concatenate batches: {e}"),
+                Status::Internal,
+            )
+        })?;
+
+        // Validate exactly 1 row (same constraint as bind)
+        if concatenated.num_rows() != 1 {
+            return Err(Error::with_message_and_status(
+                format!(
+                    "bind_stream expects exactly 1 row, got {}",
+                    concatenated.num_rows()
+                ),
+                Status::InvalidArguments,
+            ));
+        }
+
+        self.bind_data = Some(concatenated);
+        Ok(())
     }
 
     fn execute(&mut self) -> Result<impl RecordBatchReader + Send> {
@@ -277,8 +315,9 @@ impl Optionable for DruidStatement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::batch_reader::SingleBatchReader;
     use arrow_array::builder::{Float64Builder, Int64Builder, StringBuilder};
-    use arrow_schema::{DataType, Field};
+    use arrow_schema::{ArrowError, DataType, Field, SchemaRef};
 
     fn create_test_client() -> Arc<DruidClient> {
         Arc::new(DruidClient::new("http://localhost:8888").unwrap())
@@ -447,5 +486,130 @@ mod tests {
         assert_eq!(params[0].value, serde_json::json!(42));
         assert_eq!(params[1].sql_type, "VARCHAR");
         assert_eq!(params[1].value, serde_json::json!("test"));
+    }
+
+    // Helper for testing bind_stream with multiple batches
+    struct MultiBatchReader {
+        batches: std::vec::IntoIter<RecordBatch>,
+        schema: SchemaRef,
+    }
+
+    impl MultiBatchReader {
+        fn new(batches: Vec<RecordBatch>) -> Self {
+            let schema = batches
+                .first()
+                .map_or_else(|| Arc::new(Schema::empty()), |b| b.schema());
+            Self {
+                batches: batches.into_iter(),
+                schema,
+            }
+        }
+    }
+
+    impl Iterator for MultiBatchReader {
+        type Item = std::result::Result<RecordBatch, ArrowError>;
+        fn next(&mut self) -> Option<Self::Item> {
+            self.batches.next().map(Ok)
+        }
+    }
+
+    impl RecordBatchReader for MultiBatchReader {
+        fn schema(&self) -> SchemaRef {
+            self.schema.clone()
+        }
+    }
+
+    #[test]
+    fn test_bind_stream_single_batch_single_row() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let mut builder = Int64Builder::new();
+        builder.append_value(42);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("param", array)]);
+        let reader: Box<dyn RecordBatchReader + Send> = Box::new(SingleBatchReader::new(batch));
+
+        let result = stmt.bind_stream(reader);
+        assert!(result.is_ok());
+        assert!(stmt.bind_data.is_some());
+        assert_eq!(stmt.bind_data.as_ref().unwrap().num_rows(), 1);
+    }
+
+    #[test]
+    fn test_bind_stream_rejects_multiple_rows() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let mut builder = Int64Builder::new();
+        builder.append_value(1);
+        builder.append_value(2);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("param", array)]);
+        let reader: Box<dyn RecordBatchReader + Send> = Box::new(SingleBatchReader::new(batch));
+
+        let result = stmt.bind_stream(reader);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::InvalidArguments);
+    }
+
+    #[test]
+    fn test_bind_stream_rejects_zero_rows() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let batch = RecordBatch::new_empty(schema);
+        let reader: Box<dyn RecordBatchReader + Send> = Box::new(SingleBatchReader::new(batch));
+
+        let result = stmt.bind_stream(reader);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::InvalidArguments);
+    }
+
+    #[test]
+    fn test_bind_stream_replaces_previous_bind_data() {
+        let mut stmt = DruidStatement::new(create_test_client());
+
+        // First bind with bind()
+        let mut builder = Int64Builder::new();
+        builder.append_value(1);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("param", array)]);
+        stmt.bind(batch).unwrap();
+
+        // Then bind_stream
+        let mut builder = Int64Builder::new();
+        builder.append_value(99);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("param", array)]);
+        let reader: Box<dyn RecordBatchReader + Send> = Box::new(SingleBatchReader::new(batch));
+        stmt.bind_stream(reader).unwrap();
+
+        // Verify bind_data is from bind_stream
+        let value = stmt
+            .bind_data
+            .as_ref()
+            .unwrap()
+            .column(0)
+            .as_primitive::<Int64Type>()
+            .value(0);
+        assert_eq!(value, 99);
+    }
+
+    #[test]
+    fn test_bind_stream_concatenates_multiple_batches() {
+        let mut stmt = DruidStatement::new(create_test_client());
+
+        // Create two empty batches and one batch with 1 row
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let empty1 = RecordBatch::new_empty(schema.clone());
+        let empty2 = RecordBatch::new_empty(schema);
+
+        let mut builder = Int64Builder::new();
+        builder.append_value(42);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let with_row = make_batch(vec![("a", array)]);
+
+        let reader: Box<dyn RecordBatchReader + Send> =
+            Box::new(MultiBatchReader::new(vec![empty1, empty2, with_row]));
+
+        let result = stmt.bind_stream(reader);
+        assert!(result.is_ok());
+        assert_eq!(stmt.bind_data.as_ref().unwrap().num_rows(), 1);
     }
 }

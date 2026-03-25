@@ -99,6 +99,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-select"
+version = "57.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68bf3e3efbd1278f770d67e5dc410257300b161b93baedb3aae836144edcaf4b"
+dependencies = [
+ "ahash",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "num-traits",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -287,6 +301,7 @@ dependencies = [
  "adbc_ffi",
  "arrow-array",
  "arrow-schema",
+ "arrow-select",
  "chrono",
  "reqwest",
  "serde",
