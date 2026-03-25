@@ -16,3 +16,4 @@ An ADBC driver for Apache Druid, written in Rust.
 - Run tests: `cargo test -- --include-ignored`
 - Run linter: `cargo clippy`
 - Run formatter: `cargo fmt`
+- Full check: `cargo fmt --check && cargo clippy -- -D warnings && cargo test -- --include-ignored`
