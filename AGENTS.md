@@ -7,6 +7,8 @@ An ADBC driver for Apache Druid, written in Rust.
 ## General Guidelines
 
 - IMPORTANT: Use red/green TDD
+- Use idiomatic, elegant, and concise code
+- Run the full check command before considering code complete
 - Use conventional commits for commit messages
 
 ## Commands
