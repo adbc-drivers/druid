@@ -644,3 +644,329 @@ fn test_get_table_schema_invalid_catalog() {
     let result = conn.get_table_schema(Some("invalid_catalog"), Some("druid"), "wikipedia");
     assert!(result.is_err(), "Should return error for invalid catalog");
 }
+
+#[test]
+#[ignore]
+fn test_get_objects_catalogs_depth() {
+    use adbc_core::options::ObjectDepth;
+
+    let conn = get_connection();
+    let mut reader = conn
+        .get_objects(ObjectDepth::Catalogs, None, None, None, None, None)
+        .unwrap();
+
+    let batch = reader.next().unwrap().unwrap();
+    assert_eq!(batch.num_rows(), 1);
+
+    // Verify catalog_name is "druid"
+    let catalog_col = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .unwrap();
+    assert_eq!(catalog_col.value(0), "druid");
+
+    // Verify catalog_db_schemas is null at Catalogs depth
+    assert!(batch.column(1).is_null(0));
+}
+
+#[test]
+#[ignore]
+fn test_get_objects_schemas_depth() {
+    use adbc_core::options::ObjectDepth;
+
+    let conn = get_connection();
+    let mut reader = conn
+        .get_objects(ObjectDepth::Schemas, None, None, None, None, None)
+        .unwrap();
+
+    let batch = reader.next().unwrap().unwrap();
+    assert_eq!(batch.num_rows(), 1);
+
+    // Verify schemas are present
+    let schemas_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow_array::ListArray>()
+        .unwrap();
+    assert!(!schemas_col.is_null(0));
+
+    let schemas_struct = schemas_col.value(0);
+    let struct_arr = schemas_struct
+        .as_any()
+        .downcast_ref::<arrow_array::StructArray>()
+        .unwrap();
+
+    // Should have at least druid, sys, INFORMATION_SCHEMA schemas
+    assert!(struct_arr.len() >= 3);
+
+    // Verify schema names
+    let schema_names = struct_arr
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .unwrap();
+    let names: Vec<&str> = (0..schema_names.len())
+        .map(|i| schema_names.value(i))
+        .collect();
+    assert!(names.contains(&"druid"), "Should contain 'druid' schema");
+    assert!(names.contains(&"sys"), "Should contain 'sys' schema");
+    assert!(
+        names.contains(&"INFORMATION_SCHEMA"),
+        "Should contain 'INFORMATION_SCHEMA' schema"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_get_objects_tables_depth() {
+    use adbc_core::options::ObjectDepth;
+
+    let conn = get_connection();
+    let mut reader = conn
+        .get_objects(ObjectDepth::Tables, None, Some("druid"), None, None, None)
+        .unwrap();
+
+    let batch = reader.next().unwrap().unwrap();
+    assert_eq!(batch.num_rows(), 1);
+
+    // Navigate to tables
+    let schemas_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow_array::ListArray>()
+        .unwrap();
+    let schemas_struct = schemas_col.value(0);
+    let struct_arr = schemas_struct
+        .as_any()
+        .downcast_ref::<arrow_array::StructArray>()
+        .unwrap();
+    let tables_list = struct_arr
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow_array::ListArray>()
+        .unwrap();
+    let tables = tables_list.value(0);
+    let tables_struct = tables
+        .as_any()
+        .downcast_ref::<arrow_array::StructArray>()
+        .unwrap();
+
+    // Should have at least the wikipedia table
+    assert!(tables_struct.len() >= 1);
+
+    let table_names = tables_struct
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .unwrap();
+    let names: Vec<&str> = (0..table_names.len())
+        .map(|i| table_names.value(i))
+        .collect();
+    assert!(
+        names.contains(&"wikipedia"),
+        "Should contain 'wikipedia' table"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_get_objects_columns_depth() {
+    use adbc_core::options::ObjectDepth;
+
+    let conn = get_connection();
+    let mut reader = conn
+        .get_objects(
+            ObjectDepth::Columns,
+            None,
+            Some("druid"),
+            Some("wikipedia"),
+            None,
+            None,
+        )
+        .unwrap();
+
+    let batch = reader.next().unwrap().unwrap();
+
+    // Navigate to columns
+    let schemas_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow_array::ListArray>()
+        .unwrap();
+    let schemas_struct = schemas_col.value(0);
+    let struct_arr = schemas_struct
+        .as_any()
+        .downcast_ref::<arrow_array::StructArray>()
+        .unwrap();
+    let tables_list = struct_arr
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow_array::ListArray>()
+        .unwrap();
+    let tables = tables_list.value(0);
+    let tables_struct = tables
+        .as_any()
+        .downcast_ref::<arrow_array::StructArray>()
+        .unwrap();
+    let columns_list = tables_struct
+        .column(2)
+        .as_any()
+        .downcast_ref::<arrow_array::ListArray>()
+        .unwrap();
+
+    // Columns should not be null
+    assert!(!columns_list.is_null(0));
+
+    let columns = columns_list.value(0);
+    let columns_struct = columns
+        .as_any()
+        .downcast_ref::<arrow_array::StructArray>()
+        .unwrap();
+
+    // Wikipedia table should have columns
+    assert!(columns_struct.len() > 0);
+
+    // Verify column names include __time
+    let column_names = columns_struct
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .unwrap();
+    let names: Vec<&str> = (0..column_names.len())
+        .map(|i| column_names.value(i))
+        .collect();
+    assert!(names.contains(&"__time"), "Should contain '__time' column");
+}
+
+#[test]
+#[ignore]
+fn test_get_objects_with_table_type_filter() {
+    use adbc_core::options::ObjectDepth;
+
+    let conn = get_connection();
+
+    // Filter for only SYSTEM TABLE
+    let mut reader = conn
+        .get_objects(
+            ObjectDepth::Tables,
+            None,
+            None,
+            None,
+            Some(vec!["SYSTEM TABLE"]),
+            None,
+        )
+        .unwrap();
+
+    let batch = reader.next().unwrap().unwrap();
+
+    // Navigate to tables - verify all are SYSTEM TABLE type
+    let schemas_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow_array::ListArray>()
+        .unwrap();
+
+    // Check each schema's tables
+    for i in 0..schemas_col.len() {
+        if schemas_col.is_null(i) {
+            continue;
+        }
+        let schemas_struct = schemas_col.value(i);
+        let struct_arr = schemas_struct
+            .as_any()
+            .downcast_ref::<arrow_array::StructArray>()
+            .unwrap();
+
+        for j in 0..struct_arr.len() {
+            let tables_list = struct_arr
+                .column(1)
+                .as_any()
+                .downcast_ref::<arrow_array::ListArray>()
+                .unwrap();
+            if tables_list.is_null(j) {
+                continue;
+            }
+            let tables = tables_list.value(j);
+            let tables_struct = tables
+                .as_any()
+                .downcast_ref::<arrow_array::StructArray>()
+                .unwrap();
+
+            let table_types = tables_struct
+                .column(1)
+                .as_any()
+                .downcast_ref::<arrow_array::StringArray>()
+                .unwrap();
+
+            for k in 0..table_types.len() {
+                assert_eq!(
+                    table_types.value(k),
+                    "SYSTEM TABLE",
+                    "All tables should be SYSTEM TABLE"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn test_get_objects_invalid_catalog_returns_empty() {
+    use adbc_core::options::ObjectDepth;
+
+    let conn = get_connection();
+    let mut reader = conn
+        .get_objects(
+            ObjectDepth::Catalogs,
+            Some("invalid_catalog"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+    let batch = reader.next().unwrap().unwrap();
+    assert_eq!(batch.num_rows(), 0, "Invalid catalog should return empty");
+}
+
+#[test]
+#[ignore]
+fn test_get_objects_with_schema_pattern() {
+    use adbc_core::options::ObjectDepth;
+
+    let conn = get_connection();
+    let mut reader = conn
+        .get_objects(
+            ObjectDepth::Schemas,
+            None,
+            Some("dr%"), // Pattern for "druid"
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+    let batch = reader.next().unwrap().unwrap();
+
+    let schemas_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow_array::ListArray>()
+        .unwrap();
+    let schemas_struct = schemas_col.value(0);
+    let struct_arr = schemas_struct
+        .as_any()
+        .downcast_ref::<arrow_array::StructArray>()
+        .unwrap();
+    let schema_names = struct_arr
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .unwrap();
+
+    // Should only have "druid" schema matching "dr%"
+    assert_eq!(schema_names.len(), 1);
+    assert_eq!(schema_names.value(0), "druid");
+}

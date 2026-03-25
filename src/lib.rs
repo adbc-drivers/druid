@@ -4,6 +4,7 @@ pub mod connection;
 pub mod database;
 pub mod driver;
 mod info;
+mod objects;
 mod parameters;
 pub mod statement;
 
