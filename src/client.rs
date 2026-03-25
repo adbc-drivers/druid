@@ -299,6 +299,47 @@ impl DruidClient {
         })
     }
 
+    /// Fetches the Druid server version from the `/status` endpoint.
+    ///
+    /// Returns "unknown" if the version cannot be determined.
+    pub fn get_server_version(&self) -> String {
+        self.fetch_server_version()
+            .unwrap_or_else(|_| "unknown".to_string())
+    }
+
+    /// Internal method to fetch server version, returning Result for error handling.
+    fn fetch_server_version(&self) -> Result<String> {
+        let url = format!("{}/status", self.base_url);
+
+        let response = self.client.get(&url).send().map_err(|e| {
+            Error::with_message_and_status(format!("Failed to fetch status: {e}"), Status::IO)
+        })?;
+
+        if !response.status().is_success() {
+            return Err(Error::with_message_and_status(
+                format!("Status request failed with status {}", response.status()),
+                Status::IO,
+            ));
+        }
+
+        let body: serde_json::Value = response.json().map_err(|e| {
+            Error::with_message_and_status(
+                format!("Failed to parse status response: {e}"),
+                Status::Internal,
+            )
+        })?;
+
+        body.get("version")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .ok_or_else(|| {
+                Error::with_message_and_status(
+                    "Version field not found in status response".to_string(),
+                    Status::Internal,
+                )
+            })
+    }
+
     pub(crate) fn execute_query(
         &self,
         query: &str,

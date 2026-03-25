@@ -4,12 +4,13 @@
 //! with the wikipedia datasource loaded. These are marked with `#[ignore]`
 //! and can be run with `cargo test -- --ignored`.
 
-use adbc_core::options::{OptionDatabase, OptionValue};
+use adbc_core::options::{InfoCode, OptionDatabase, OptionValue};
 use adbc_core::{Connection, Database, Driver, Optionable, Statement};
 use arrow_array::RecordBatch;
 use arrow_array::RecordBatchReader;
 use arrow_array::cast::AsArray;
 use druid_driver::{DruidConnection, DruidDriver};
+use std::collections::HashSet;
 
 fn get_connection() -> DruidConnection {
     let mut driver = DruidDriver::default();
@@ -413,4 +414,155 @@ fn test_execute_schema_does_not_consume_bind_data() {
         .column(0)
         .as_primitive::<arrow_array::types::Int64Type>();
     assert_eq!(col.value(0), 42);
+}
+
+#[test]
+#[ignore]
+fn test_get_info_returns_all_codes() {
+    let conn = get_connection();
+
+    // Call get_info with None to get all supported info codes
+    let mut reader = conn.get_info(None).unwrap();
+    let batch = reader.next().unwrap().unwrap();
+
+    // Should have at least 8 rows (all supported codes)
+    assert!(batch.num_rows() >= 8, "Expected at least 8 info codes");
+
+    // Verify schema
+    assert_eq!(batch.schema().field(0).name(), "info_name");
+    assert_eq!(batch.schema().field(1).name(), "info_value");
+}
+
+#[test]
+#[ignore]
+fn test_get_info_filters_by_codes() {
+    let conn = get_connection();
+
+    // Request only specific codes
+    let codes = HashSet::from([InfoCode::VendorName, InfoCode::DriverName]);
+    let mut reader = conn.get_info(Some(codes)).unwrap();
+    let batch = reader.next().unwrap().unwrap();
+
+    assert_eq!(batch.num_rows(), 2);
+}
+
+#[test]
+#[ignore]
+fn test_get_info_vendor_name() {
+    let conn = get_connection();
+
+    let codes = HashSet::from([InfoCode::VendorName]);
+    let mut reader = conn.get_info(Some(codes)).unwrap();
+    let batch = reader.next().unwrap().unwrap();
+
+    assert_eq!(batch.num_rows(), 1);
+
+    // Verify the value is "Apache Druid"
+    let value_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow_array::UnionArray>()
+        .unwrap();
+
+    let string_value = value_col.value(0);
+    let string_array = string_value.as_string::<i32>();
+    assert_eq!(string_array.value(0), "Apache Druid");
+}
+
+#[test]
+#[ignore]
+fn test_get_info_vendor_version() {
+    let conn = get_connection();
+
+    let codes = HashSet::from([InfoCode::VendorVersion]);
+    let mut reader = conn.get_info(Some(codes)).unwrap();
+    let batch = reader.next().unwrap().unwrap();
+
+    assert_eq!(batch.num_rows(), 1);
+
+    // Verify a version string is returned (should be like "26.0.0" or similar)
+    let value_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow_array::UnionArray>()
+        .unwrap();
+
+    let string_value = value_col.value(0);
+    let string_array = string_value.as_string::<i32>();
+    let version = string_array.value(0);
+
+    // Version should not be empty or "unknown" when connected to a running Druid
+    assert!(!version.is_empty(), "Version should not be empty");
+    // Version format check - should contain at least one digit
+    assert!(
+        version.chars().any(|c| c.is_ascii_digit()),
+        "Version should contain numbers: {version}"
+    );
+}
+
+#[test]
+#[ignore]
+fn test_get_info_vendor_sql_is_true() {
+    let conn = get_connection();
+
+    let codes = HashSet::from([InfoCode::VendorSql]);
+    let mut reader = conn.get_info(Some(codes)).unwrap();
+    let batch = reader.next().unwrap().unwrap();
+
+    assert_eq!(batch.num_rows(), 1);
+
+    // Verify VendorSql is true
+    let value_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow_array::UnionArray>()
+        .unwrap();
+
+    let bool_value = value_col.value(0);
+    let bool_array = bool_value.as_boolean();
+    assert!(bool_array.value(0), "VendorSql should be true");
+}
+
+#[test]
+#[ignore]
+fn test_get_info_driver_adbc_version() {
+    let conn = get_connection();
+
+    let codes = HashSet::from([InfoCode::DriverAdbcVersion]);
+    let mut reader = conn.get_info(Some(codes)).unwrap();
+    let batch = reader.next().unwrap().unwrap();
+
+    assert_eq!(batch.num_rows(), 1);
+
+    // Verify DriverAdbcVersion is 1_001_000 (ADBC 1.1.0)
+    let value_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow_array::UnionArray>()
+        .unwrap();
+
+    let int64_value = value_col.value(0);
+    let int64_array = int64_value.as_primitive::<arrow_array::types::Int64Type>();
+    assert_eq!(int64_array.value(0), 1_001_000);
+}
+
+#[test]
+fn test_get_info_ignores_unsupported_codes() {
+    let mut driver = DruidDriver::default();
+    let mut db = driver.new_database().unwrap();
+    // Use a fake URI - we won't actually connect
+    db.set_option(
+        OptionDatabase::Uri,
+        OptionValue::String("http://localhost:9999".to_string()),
+    )
+    .unwrap();
+    let conn = db.new_connection().unwrap();
+
+    // Request only unsupported codes
+    let codes = HashSet::from([InfoCode::VendorSubstraitMinVersion]);
+    let mut reader = conn.get_info(Some(codes)).unwrap();
+    let batch = reader.next().unwrap().unwrap();
+
+    // Should return empty batch (no rows)
+    assert_eq!(batch.num_rows(), 0);
 }

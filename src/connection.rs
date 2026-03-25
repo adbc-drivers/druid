@@ -1,6 +1,8 @@
 use crate::batch_reader::SingleBatchReader;
 use crate::client::DruidClient;
+use crate::info::GetInfoBuilder;
 use crate::statement::DruidStatement;
+use adbc_core::constants::ADBC_VERSION_1_1_0;
 use adbc_core::error::{Error, Result, Status};
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionValue};
 use adbc_core::{Connection, Optionable};
@@ -8,6 +10,21 @@ use arrow_array::RecordBatchReader;
 use arrow_schema::Schema;
 use std::collections::HashSet;
 use std::sync::Arc;
+
+/// The set of info codes supported by this driver.
+const SUPPORTED_INFO_CODES: &[InfoCode] = &[
+    InfoCode::VendorName,
+    InfoCode::VendorVersion,
+    InfoCode::VendorSql,
+    InfoCode::VendorSubstrait,
+    InfoCode::DriverName,
+    InfoCode::DriverVersion,
+    InfoCode::DriverArrowVersion,
+    InfoCode::DriverAdbcVersion,
+];
+
+/// Arrow library version used by this driver.
+const ARROW_VERSION: &str = "57";
 
 #[derive(Debug)]
 pub struct DruidConnection {
@@ -40,11 +57,40 @@ impl Connection for DruidConnection {
         ))
     }
 
-    fn get_info(&self, _codes: Option<HashSet<InfoCode>>) -> Result<impl RecordBatchReader + Send> {
-        Err::<SingleBatchReader, Error>(Error::with_message_and_status(
-            "get_info not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+    fn get_info(&self, codes: Option<HashSet<InfoCode>>) -> Result<impl RecordBatchReader + Send> {
+        let mut builder = GetInfoBuilder::new();
+
+        // Determine which codes to return
+        let codes_to_return: Vec<InfoCode> = match codes {
+            Some(requested) => {
+                // Filter to only supported codes, preserving request order isn't required
+                let supported: HashSet<InfoCode> = SUPPORTED_INFO_CODES.iter().copied().collect();
+                requested.intersection(&supported).copied().collect()
+            }
+            None => SUPPORTED_INFO_CODES.to_vec(),
+        };
+
+        for code in codes_to_return {
+            match code {
+                InfoCode::VendorName => builder.add_string(code, "Apache Druid"),
+                InfoCode::VendorVersion => {
+                    let version = self.client.get_server_version();
+                    builder.add_string(code, &version);
+                }
+                InfoCode::VendorSql => builder.add_bool(code, true),
+                InfoCode::VendorSubstrait => builder.add_bool(code, false),
+                InfoCode::DriverName => builder.add_string(code, "ADBC Druid Driver"),
+                InfoCode::DriverVersion => builder.add_string(code, env!("CARGO_PKG_VERSION")),
+                InfoCode::DriverArrowVersion => builder.add_string(code, ARROW_VERSION),
+                InfoCode::DriverAdbcVersion => {
+                    builder.add_int64(code, i64::from(ADBC_VERSION_1_1_0));
+                }
+                _ => {} // Silently ignore unsupported codes (shouldn't happen due to filter above)
+            }
+        }
+
+        let batch = builder.finish()?;
+        Ok(SingleBatchReader::new(batch))
     }
 
     fn get_objects(

@@ -3,6 +3,7 @@ mod client;
 pub mod connection;
 pub mod database;
 pub mod driver;
+mod info;
 mod parameters;
 pub mod statement;
 
