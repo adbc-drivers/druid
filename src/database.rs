@@ -3,9 +3,26 @@ use adbc_core::error::{Error, Result, Status};
 use adbc_core::options::{OptionConnection, OptionDatabase, OptionValue};
 use adbc_core::{Database, Optionable};
 
+fn require_string(value: OptionValue, name: &str) -> Result<String> {
+    match value {
+        OptionValue::String(s) => Ok(s),
+        _ => Err(Error::with_message_and_status(
+            format!("{name} must be a string"),
+            Status::InvalidArguments,
+        )),
+    }
+}
+
+fn get_or_not_found(opt: Option<&String>, name: &str) -> Result<String> {
+    opt.cloned()
+        .ok_or_else(|| Error::with_message_and_status(format!("{name} not set"), Status::NotFound))
+}
+
 #[derive(Debug, Default)]
 pub struct DruidDatabase {
     uri: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
 }
 
 impl DruidDatabase {
@@ -32,7 +49,7 @@ impl Database for DruidDatabase {
                 Status::InvalidState,
             )
         })?;
-        DruidConnection::new(uri)
+        DruidConnection::new(uri, self.username.clone(), self.password.clone())
     }
 }
 
@@ -40,27 +57,25 @@ impl Optionable for DruidDatabase {
     type Option = OptionDatabase;
 
     fn set_option(&mut self, key: Self::Option, value: OptionValue) -> Result<()> {
-        match (key, value) {
-            (OptionDatabase::Uri, OptionValue::String(uri)) => {
-                self.uri = Some(uri);
-                Ok(())
+        match key {
+            OptionDatabase::Uri => self.uri = Some(require_string(value, "URI")?),
+            OptionDatabase::Username => self.username = Some(require_string(value, "Username")?),
+            OptionDatabase::Password => self.password = Some(require_string(value, "Password")?),
+            _ => {
+                return Err(Error::with_message_and_status(
+                    format!("Unsupported option: {key:?}"),
+                    Status::NotImplemented,
+                ));
             }
-            (OptionDatabase::Uri, _) => Err(Error::with_message_and_status(
-                "URI must be a string".to_string(),
-                Status::InvalidArguments,
-            )),
-            (key, _) => Err(Error::with_message_and_status(
-                format!("Unsupported option: {key:?}"),
-                Status::NotImplemented,
-            )),
         }
+        Ok(())
     }
 
     fn get_option_string(&self, key: Self::Option) -> Result<String> {
         match key {
-            OptionDatabase::Uri => self.uri.clone().ok_or_else(|| {
-                Error::with_message_and_status("URI not set".to_string(), Status::NotFound)
-            }),
+            OptionDatabase::Uri => get_or_not_found(self.uri.as_ref(), "URI"),
+            OptionDatabase::Username => get_or_not_found(self.username.as_ref(), "Username"),
+            OptionDatabase::Password => get_or_not_found(self.password.as_ref(), "Password"),
             _ => Err(Error::with_message_and_status(
                 format!("Unsupported option: {key:?}"),
                 Status::NotImplemented,
@@ -145,5 +160,149 @@ mod tests {
         .unwrap();
         let result = db.new_connection();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_set_username_option() {
+        let mut db = DruidDatabase::new();
+        let result = db.set_option(
+            OptionDatabase::Username,
+            OptionValue::String("admin".to_string()),
+        );
+        assert!(result.is_ok());
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Username).unwrap(),
+            "admin"
+        );
+    }
+
+    #[test]
+    fn test_set_password_option() {
+        let mut db = DruidDatabase::new();
+        let result = db.set_option(
+            OptionDatabase::Password,
+            OptionValue::String("secret".to_string()),
+        );
+        assert!(result.is_ok());
+        assert_eq!(
+            db.get_option_string(OptionDatabase::Password).unwrap(),
+            "secret"
+        );
+    }
+
+    #[test]
+    fn test_get_username_option() {
+        let mut db = DruidDatabase::new();
+        db.set_option(
+            OptionDatabase::Username,
+            OptionValue::String("admin".to_string()),
+        )
+        .unwrap();
+        let username = db.get_option_string(OptionDatabase::Username).unwrap();
+        assert_eq!(username, "admin");
+    }
+
+    #[test]
+    fn test_get_password_option() {
+        let mut db = DruidDatabase::new();
+        db.set_option(
+            OptionDatabase::Password,
+            OptionValue::String("secret".to_string()),
+        )
+        .unwrap();
+        let password = db.get_option_string(OptionDatabase::Password).unwrap();
+        assert_eq!(password, "secret");
+    }
+
+    #[test]
+    fn test_get_username_not_set() {
+        let db = DruidDatabase::new();
+        let result = db.get_option_string(OptionDatabase::Username);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::NotFound);
+    }
+
+    #[test]
+    fn test_get_password_not_set() {
+        let db = DruidDatabase::new();
+        let result = db.get_option_string(OptionDatabase::Password);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::NotFound);
+    }
+
+    #[test]
+    fn test_username_must_be_string() {
+        let mut db = DruidDatabase::new();
+        let result = db.set_option(OptionDatabase::Username, OptionValue::Int(123));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::InvalidArguments);
+    }
+
+    #[test]
+    fn test_password_must_be_string() {
+        let mut db = DruidDatabase::new();
+        let result = db.set_option(OptionDatabase::Password, OptionValue::Int(123));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::InvalidArguments);
+    }
+
+    #[test]
+    fn test_new_connection_with_credentials() {
+        let mut db = DruidDatabase::new();
+        db.set_option(
+            OptionDatabase::Uri,
+            OptionValue::String("http://localhost:8888".to_string()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Username,
+            OptionValue::String("admin".to_string()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Password,
+            OptionValue::String("secret".to_string()),
+        )
+        .unwrap();
+        let result = db.new_connection();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_new_connection_with_username_only_fails() {
+        let mut db = DruidDatabase::new();
+        db.set_option(
+            OptionDatabase::Uri,
+            OptionValue::String("http://localhost:8888".to_string()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Username,
+            OptionValue::String("admin".to_string()),
+        )
+        .unwrap();
+        let result = db.new_connection();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status, Status::InvalidArguments);
+    }
+
+    #[test]
+    fn test_new_connection_with_password_only_fails() {
+        let mut db = DruidDatabase::new();
+        db.set_option(
+            OptionDatabase::Uri,
+            OptionValue::String("http://localhost:8888".to_string()),
+        )
+        .unwrap();
+        db.set_option(
+            OptionDatabase::Password,
+            OptionValue::String("secret".to_string()),
+        )
+        .unwrap();
+        let result = db.new_connection();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status, Status::InvalidArguments);
     }
 }

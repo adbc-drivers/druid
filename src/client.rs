@@ -259,14 +259,17 @@ const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default request timeout
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
+type Credentials = (String, String);
+
 #[derive(Debug)]
 pub struct DruidClient {
     client: Client,
     base_url: String,
+    credentials: Option<Credentials>,
 }
 
 impl DruidClient {
-    /// Creates a new `DruidClient` with default timeout settings.
+    /// Creates a new `DruidClient` with default timeout settings and no authentication.
     ///
     /// Default timeouts:
     /// - Connection timeout: 30 seconds
@@ -275,7 +278,34 @@ impl DruidClient {
     /// # Errors
     /// Returns an error if the HTTP client fails to build.
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
-        Self::with_timeouts(base_url, DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT)
+        Self::with_auth(base_url, None, None)
+    }
+
+    /// Creates a new `DruidClient` with optional authentication credentials.
+    ///
+    /// Uses default timeout settings:
+    /// - Connection timeout: 30 seconds
+    /// - Request timeout: 300 seconds (5 minutes)
+    ///
+    /// # Arguments
+    /// * `base_url` - The base URL of the Druid server (e.g., `http://localhost:8888`)
+    /// * `username` - Optional username for HTTP Basic Authentication
+    /// * `password` - Optional password for HTTP Basic Authentication
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP client fails to build.
+    pub fn with_auth(
+        base_url: impl Into<String>,
+        username: Option<String>,
+        password: Option<String>,
+    ) -> Result<Self> {
+        Self::with_auth_and_timeouts(
+            base_url,
+            username,
+            password,
+            DEFAULT_CONNECT_TIMEOUT,
+            DEFAULT_REQUEST_TIMEOUT,
+        )
     }
 
     /// Creates a new `DruidClient` with custom timeout settings.
@@ -292,6 +322,27 @@ impl DruidClient {
         connect_timeout: Duration,
         request_timeout: Duration,
     ) -> Result<Self> {
+        Self::with_auth_and_timeouts(base_url, None, None, connect_timeout, request_timeout)
+    }
+
+    /// Creates a new `DruidClient` with optional authentication and custom timeouts.
+    ///
+    /// # Arguments
+    /// * `base_url` - The base URL of the Druid server (e.g., `http://localhost:8888`)
+    /// * `username` - Optional username for HTTP Basic Authentication
+    /// * `password` - Optional password for HTTP Basic Authentication
+    /// * `connect_timeout` - Maximum time to wait for a connection to be established
+    /// * `request_timeout` - Maximum time to wait for a complete response
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP client fails to build.
+    pub fn with_auth_and_timeouts(
+        base_url: impl Into<String>,
+        username: Option<String>,
+        password: Option<String>,
+        connect_timeout: Duration,
+        request_timeout: Duration,
+    ) -> Result<Self> {
         let client = Client::builder()
             .connect_timeout(connect_timeout)
             .timeout(request_timeout)
@@ -303,9 +354,26 @@ impl DruidClient {
                 )
             })?;
 
+        let credentials = match (&username, &password) {
+            (Some(_), None) => {
+                return Err(Error::with_message_and_status(
+                    "Username provided without password".to_string(),
+                    Status::InvalidArguments,
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(Error::with_message_and_status(
+                    "Password provided without username".to_string(),
+                    Status::InvalidArguments,
+                ));
+            }
+            _ => username.zip(password),
+        };
+
         Ok(Self {
             client,
             base_url: base_url.into(),
+            credentials,
         })
     }
 
@@ -321,7 +389,9 @@ impl DruidClient {
     fn fetch_server_version(&self) -> Result<String> {
         let url = format!("{}/status", self.base_url);
 
-        let response = self.client.get(&url).send().map_err(|e| {
+        let request = self.client.get(&url);
+        let request = self.apply_auth(request);
+        let response = request.send().map_err(|e| {
             Error::with_message_and_status(format!("Failed to fetch status: {e}"), Status::IO)
         })?;
 
@@ -350,6 +420,18 @@ impl DruidClient {
             })
     }
 
+    /// Applies HTTP Basic Authentication to a request if credentials are configured.
+    fn apply_auth(
+        &self,
+        request: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        if let Some((username, password)) = &self.credentials {
+            request.basic_auth(username, Some(password))
+        } else {
+            request
+        }
+    }
+
     pub(crate) fn execute_query(
         &self,
         query: &str,
@@ -366,7 +448,7 @@ impl DruidClient {
             serde_json::Value::Bool(false),
         );
 
-        let request = SqlRequest {
+        let request_body = SqlRequest {
             query: query.to_string(),
             result_format: "array".to_string(),
             header: true,
@@ -376,7 +458,9 @@ impl DruidClient {
             parameters,
         };
 
-        let response = self.client.post(&url).json(&request).send().map_err(|e| {
+        let request = self.client.post(&url).json(&request_body);
+        let request = self.apply_auth(request);
+        let response = request.send().map_err(|e| {
             Error::with_message_and_status(format!("Failed to execute query: {e}"), Status::IO)
         })?;
 
@@ -476,6 +560,46 @@ mod tests {
     use super::*;
     use arrow_array::Array;
     use arrow_array::cast::AsArray;
+
+    #[test]
+    fn test_new_client_without_auth() {
+        let client = DruidClient::new("http://localhost:8888").unwrap();
+        assert!(client.credentials.is_none());
+    }
+
+    #[test]
+    fn test_new_client_with_auth() {
+        let client = DruidClient::with_auth(
+            "http://localhost:8888",
+            Some("admin".to_string()),
+            Some("secret".to_string()),
+        )
+        .unwrap();
+        assert!(client.credentials.is_some());
+        let (username, password) = client.credentials.unwrap();
+        assert_eq!(username, "admin");
+        assert_eq!(password, "secret");
+    }
+
+    #[test]
+    fn test_new_client_with_partial_auth_username_only_fails() {
+        let result =
+            DruidClient::with_auth("http://localhost:8888", Some("admin".to_string()), None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status, Status::InvalidArguments);
+        assert!(err.message.contains("password"));
+    }
+
+    #[test]
+    fn test_new_client_with_partial_auth_password_only_fails() {
+        let result =
+            DruidClient::with_auth("http://localhost:8888", None, Some("secret".to_string()));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status, Status::InvalidArguments);
+        assert!(err.message.contains("username"));
+    }
 
     fn make_sql_request(query: &str, parameters: Vec<SqlParameter>) -> SqlRequest {
         SqlRequest {

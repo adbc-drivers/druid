@@ -39,13 +39,24 @@ pub struct DruidConnection {
 }
 
 impl DruidConnection {
-    /// Creates a new `DruidConnection` with the given URI.
+    /// Creates a new `DruidConnection` with the given URI and optional credentials.
+    ///
+    /// # Arguments
+    /// * `uri` - The base URL of the Druid server
+    /// * `username` - Optional username for HTTP Basic Authentication
+    /// * `password` - Optional password for HTTP Basic Authentication
     ///
     /// # Errors
-    /// Returns an error if the HTTP client fails to build.
-    pub fn new(uri: impl Into<String>) -> Result<Self> {
+    /// Returns an error if:
+    /// - The HTTP client fails to build
+    /// - Only one of username or password is provided (both or neither required)
+    pub fn new(
+        uri: impl Into<String>,
+        username: Option<String>,
+        password: Option<String>,
+    ) -> Result<Self> {
         Ok(Self {
-            client: Arc::new(DruidClient::new(uri)?),
+            client: Arc::new(DruidClient::with_auth(uri, username, password)?),
         })
     }
 
@@ -528,8 +539,43 @@ mod tests {
     use arrow_array::cast::AsArray;
 
     #[test]
+    fn test_new_connection_with_credentials() {
+        let result = DruidConnection::new(
+            "http://localhost:8888",
+            Some("admin".to_string()),
+            Some("secret".to_string()),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_new_connection_without_credentials() {
+        let result = DruidConnection::new("http://localhost:8888", None, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_new_connection_username_only_fails() {
+        let result = DruidConnection::new("http://localhost:8888", Some("admin".to_string()), None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status, Status::InvalidArguments);
+        assert!(err.message.contains("password"));
+    }
+
+    #[test]
+    fn test_new_connection_password_only_fails() {
+        let result =
+            DruidConnection::new("http://localhost:8888", None, Some("secret".to_string()));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.status, Status::InvalidArguments);
+        assert!(err.message.contains("username"));
+    }
+
+    #[test]
     fn test_get_table_types_returns_correct_schema() {
-        let conn = DruidConnection::new("http://localhost:8888").unwrap();
+        let conn = DruidConnection::new("http://localhost:8888", None, None).unwrap();
         let reader = conn.get_table_types().unwrap();
 
         assert_eq!(reader.schema(), GET_TABLE_TYPES_SCHEMA.clone());
@@ -537,7 +583,7 @@ mod tests {
 
     #[test]
     fn test_get_table_types_returns_table_and_system_table() {
-        let conn = DruidConnection::new("http://localhost:8888").unwrap();
+        let conn = DruidConnection::new("http://localhost:8888", None, None).unwrap();
         let mut reader = conn.get_table_types().unwrap();
         let batch = reader.next().unwrap().unwrap();
 
@@ -552,14 +598,14 @@ mod tests {
 
     #[test]
     fn test_get_table_schema_invalid_catalog_returns_error() {
-        let conn = DruidConnection::new("http://localhost:8888").unwrap();
+        let conn = DruidConnection::new("http://localhost:8888", None, None).unwrap();
         let result = conn.get_table_schema(Some("invalid_catalog"), Some("druid"), "wikipedia");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_get_table_schema_empty_table_name_returns_error() {
-        let conn = DruidConnection::new("http://localhost:8888").unwrap();
+        let conn = DruidConnection::new("http://localhost:8888", None, None).unwrap();
         let result = conn.get_table_schema(None, Some("druid"), "");
         assert!(result.is_err());
     }
