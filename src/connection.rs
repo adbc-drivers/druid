@@ -28,7 +28,7 @@ const SUPPORTED_INFO_CODES: &[InfoCode] = &[
 ];
 
 /// Arrow library version used by this driver.
-const ARROW_VERSION: &str = "57";
+const ARROW_VERSION: &str = "v57.3.0";
 
 /// Table types supported by Druid.
 const SUPPORTED_TABLE_TYPES: &[&str] = &["TABLE", "SYSTEM TABLE"];
