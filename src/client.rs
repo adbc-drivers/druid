@@ -130,9 +130,9 @@ impl DruidType {
                 for v in values {
                     #[allow(clippy::cast_possible_truncation)]
                     let days = v.and_then(serde_json::Value::as_str).and_then(|s| {
-                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                        chrono::DateTime::parse_from_rfc3339(s)
                             .ok()
-                            .map(|d| (d - epoch).num_days() as i32)
+                            .map(|dt| (dt.date_naive() - epoch).num_days() as i32)
                     });
                     builder.append_option(days);
                 }
@@ -707,7 +707,11 @@ mod tests {
 
     #[test]
     fn test_build_date_array() {
-        let values = [serde_json::json!("2015-09-12"), serde_json::json!(null)];
+        // Druid returns DATE values as ISO 8601 timestamp strings
+        let values = [
+            serde_json::json!("2015-09-12T00:00:00.000Z"),
+            serde_json::json!(null),
+        ];
         let array = DruidType::Date.build_array(values.iter().map(Some));
         assert_eq!(array.len(), 2);
         assert!(!array.is_null(0));
