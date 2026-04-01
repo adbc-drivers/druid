@@ -1,0 +1,14 @@
+[workspace]
+channels = ["conda-forge"]
+name = "druid-driver"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+validate = "pytest -vvs --junit-xml=validation-report.xml -rfEsxX validation/tests/"
+
+[dependencies]
+python = ">=3.14.3,<3.15"
+
+[pypi-dependencies]
+adbc-drivers-validation = { git = "https://github.com/adbc-drivers/validation" }

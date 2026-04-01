@@ -1,0 +1,1 @@
+skip = "Druid does not support CREATE/DROP TABLE DDL"

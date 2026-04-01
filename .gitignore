@@ -1,1 +1,11 @@
+# Cargo
 /target
+
+# Pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# Validation
+validation-report.xml
+__pycache__/
+.pytest_cache/

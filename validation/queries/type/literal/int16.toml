@@ -1,0 +1,1 @@
+skip = "Druid does not support a 16-bit inetger type"
