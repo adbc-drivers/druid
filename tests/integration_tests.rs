@@ -6,11 +6,11 @@
 
 use adbc_core::options::{InfoCode, OptionDatabase, OptionValue};
 use adbc_core::{Connection, Database, Driver, Optionable, Statement};
+use adbc_driver_druid::{DruidConnection, DruidDriver};
 use arrow_array::Array;
 use arrow_array::RecordBatch;
 use arrow_array::RecordBatchReader;
 use arrow_array::cast::AsArray;
-use druid_driver::{DruidConnection, DruidDriver};
 use std::collections::HashSet;
 
 fn get_connection() -> DruidConnection {
