@@ -5,10 +5,13 @@ platforms = ["osx-arm64"]
 version = "0.1.0"
 
 [tasks]
+make = "adbc-make run build DRIVER=druid VERBOSE=true IMPL_LANG=rust"
+release = "adbc-release"
 validate = "pytest -vvs --junit-xml=validation-report.xml -rfEsxX validation/tests/"
 
 [dependencies]
 python = ">=3.14.3,<3.15"
 
 [pypi-dependencies]
+adbc-drivers-dev = { git = "https://github.com/adbc-drivers/dev" }
 adbc-drivers-validation = { git = "https://github.com/adbc-drivers/validation" }
