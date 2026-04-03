@@ -30,5 +30,5 @@ def driver_path(driver: adbc_drivers_validation.model.DriverQuirks) -> str:
     }.get(sys.platform, "so")
     return str(
         Path(__file__).parent.parent.parent
-        / f"target/debug/lib{driver.name}_driver.{ext}"
+        / f"target/debug/libadbc_driver_{driver.name}.{ext}"
     )

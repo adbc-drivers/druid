@@ -3,6 +3,22 @@
 version = 4
 
 [[package]]
+name = "adbc-driver-druid"
+version = "0.1.0"
+dependencies = [
+ "adbc_core",
+ "adbc_ffi",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-schema",
+ "arrow-select",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "adbc_core"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -291,22 +307,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "druid-driver"
-version = "0.1.0"
-dependencies = [
- "adbc_core",
- "adbc_ffi",
- "arrow-array",
- "arrow-buffer",
- "arrow-schema",
- "arrow-select",
- "chrono",
- "reqwest",
- "serde",
- "serde_json",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 [workspace]
 channels = ["conda-forge"]
-name = "druid-driver"
+name = "adbc-driver-druid"
 platforms = ["osx-arm64"]
 version = "0.1.0"
 
