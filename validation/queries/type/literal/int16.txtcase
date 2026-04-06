@@ -1,0 +1,3 @@
+// part: metadata
+
+skip = "Druid does not support a 16-bit integer type"

@@ -1,1 +1,0 @@
-skip = "Druid does not support TIMESTAMP WITH TIME ZONE"

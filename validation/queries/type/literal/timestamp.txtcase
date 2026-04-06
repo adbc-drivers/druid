@@ -1,0 +1,16 @@
+// part: expected_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "res",
+            "format": "tsm:",
+            "flags": ["nullable"]
+        }
+    ]
+}
+
+// part: expected
+
+{"res": 1684158330000}

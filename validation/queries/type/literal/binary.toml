@@ -1,1 +1,0 @@
-skip = "Druid does not support from_hex() function for binary literals"

@@ -1,0 +1,12 @@
+// part: expected_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "res",
+            "format": "l",
+            "flags": ["nullable"]
+        }
+    ]
+}
