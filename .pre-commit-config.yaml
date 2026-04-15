@@ -1,0 +1,5 @@
+repos:
+  - repo: https://github.com/adbc-drivers/dev
+    rev: 109f901e32e00460ea35d66ad582e96e38134c28
+    hooks:
+    - id: rat

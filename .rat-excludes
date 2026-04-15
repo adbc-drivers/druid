@@ -1,0 +1,11 @@
+.editorconfig
+.gitattributes
+.gitignore
+.rustfmt.toml
+AGENTS.md
+Cargo.lock
+Cargo.toml
+pixi.lock
+pixi.toml
+rust-toolchain.toml
+validation/pytest.ini
