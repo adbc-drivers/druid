@@ -12,14 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from adbc_drivers_validation.tests.connection import (
-    TestConnection,  # noqa: F401
-    generate_tests,
-)
+import argparse
+from pathlib import Path
+
+import adbc_drivers_validation.generate_documentation as generate_documentation
 
 from .druid import get_quirks
 
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
 
-def pytest_generate_tests(metafunc) -> None:
-    quirks = [get_quirks(metafunc.config.getoption("vendor_version"))]
-    return generate_tests(quirks, metafunc)
+    template = Path(__file__).parent.parent.parent / "docs/druid.md"
+    template = template.resolve()
+
+    reports = [report.resolve() for report in Path(".").glob("validation-report*.xml")]
+    generate_documentation.generate(
+        get_quirks,
+        reports,
+        template,
+        args.output.resolve(),
+    )

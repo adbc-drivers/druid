@@ -8,6 +8,7 @@ version = "0.1.0"
 make = "adbc-make run build DRIVER=druid VERBOSE=true IMPL_LANG=rust"
 release = "adbc-release"
 validate = "pytest -vvs --junit-xml=validation-report.xml -rfEsxX validation/tests/"
+gendocs = "python -m validation.tests.generate_documentation"
 
 [dependencies]
 python = ">=3.14.3,<3.15"

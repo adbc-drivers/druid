@@ -26,14 +26,19 @@ from adbc_drivers_validation.tests.conftest import (  # noqa: F401
     pytest_collection_modifyitems,
 )
 
-from .druid import DruidQuirks
+from .druid import get_quirks
+
+
+def pytest_addoption(parser):
+    adbc_drivers_validation.tests.conftest.pytest_addoption(parser)
+    parser.addoption("--vendor-version", action="store", default="36")
 
 
 @pytest.fixture(scope="session")
-def driver(request) -> adbc_drivers_validation.model.DriverQuirks:
+def driver(request, pytestconfig) -> adbc_drivers_validation.model.DriverQuirks:
     driver = request.param
     assert driver.startswith("druid")
-    return DruidQuirks()
+    return get_quirks(pytestconfig.getoption("vendor_version"))
 
 
 @pytest.fixture(scope="session")

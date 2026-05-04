@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import re
+import functools
 from pathlib import Path
 
 from adbc_drivers_validation import model, quirks
@@ -23,7 +23,7 @@ class DruidQuirks(model.DriverQuirks):
     driver = "adbc_driver_druid"
     driver_name = "ADBC Druid Driver"
     vendor_name = "Apache Druid"
-    vendor_version = re.compile(r"36\.[0-9]+\.[0-9]+")
+    vendor_version = "36.0.0"
     short_version = "36"
     features = model.DriverFeatures(
         connection_get_table_schema=False,
@@ -65,4 +65,9 @@ class DruidQuirks(model.DriverQuirks):
         return quirks.split_statement(statement, dialect=self.name)
 
 
-QUIRKS = [DruidQuirks()]
+@functools.cache
+def get_quirks(version: str) -> DruidQuirks:
+    quirks = DruidQuirks()
+    if version != quirks.short_version:
+        raise ValueError(f"Unsupported Druid version: {version}")
+    return quirks

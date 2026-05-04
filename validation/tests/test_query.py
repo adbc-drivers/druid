@@ -17,8 +17,9 @@ from adbc_drivers_validation.tests.query import (
     generate_tests,
 )
 
-from . import druid
+from .druid import get_quirks
 
 
 def pytest_generate_tests(metafunc) -> None:
-    return generate_tests(druid.QUIRKS, metafunc)
+    quirks = [get_quirks(metafunc.config.getoption("vendor_version"))]
+    return generate_tests(quirks, metafunc)
