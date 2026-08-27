@@ -517,31 +517,31 @@ impl Optionable for DruidConnection {
         ))
     }
 
-    fn get_option_string(&self, _key: Self::Option) -> Result<String> {
+    fn get_option_string(&self, key: Self::Option) -> Result<String> {
         Err(Error::with_message_and_status(
-            "get_option_string not implemented".to_string(),
-            Status::NotImplemented,
+            format!("Option {key:?} not found"),
+            Status::NotFound,
         ))
     }
 
-    fn get_option_bytes(&self, _key: Self::Option) -> Result<Vec<u8>> {
+    fn get_option_bytes(&self, key: Self::Option) -> Result<Vec<u8>> {
         Err(Error::with_message_and_status(
-            "get_option_bytes not implemented".to_string(),
-            Status::NotImplemented,
+            format!("Option {key:?} not found"),
+            Status::NotFound,
         ))
     }
 
-    fn get_option_int(&self, _key: Self::Option) -> Result<i64> {
+    fn get_option_int(&self, key: Self::Option) -> Result<i64> {
         Err(Error::with_message_and_status(
-            "get_option_int not implemented".to_string(),
-            Status::NotImplemented,
+            format!("Option {key:?} not found"),
+            Status::NotFound,
         ))
     }
 
-    fn get_option_double(&self, _key: Self::Option) -> Result<f64> {
+    fn get_option_double(&self, key: Self::Option) -> Result<f64> {
         Err(Error::with_message_and_status(
-            "get_option_double not implemented".to_string(),
-            Status::NotImplemented,
+            format!("Option {key:?} not found"),
+            Status::NotFound,
         ))
     }
 }

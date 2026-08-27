@@ -14,4 +14,38 @@
 
 // part: metadata
 
-skip = "Druid does not support CREATE/DROP TABLE DDL"
+[tags]
+partial-support = true
+caveats = ["Druid 36 rejects NULL TIMESTAMP query parameters, so NULL binding is not supported."]
+
+// part: bind_query
+
+-- Druid accepts TIMESTAMP parameters as epoch milliseconds but rejects NULL values.
+SELECT CAST($1 AS TIMESTAMP) AS res
+
+// part: bind_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "res",
+            "format": "tsm:",
+            "flags": ["nullable"]
+        }
+    ]
+}
+
+// part: bind
+
+{"res": 1684158330123}
+{"res": 946684800123}
+{"res": -62135596800000}
+{"res": 253402300799999}
+
+// part: expected
+
+{"res": 1684158330123}
+{"res": 946684800123}
+{"res": -62135596800000}
+{"res": 253402300799999}

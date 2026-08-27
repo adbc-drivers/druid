@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// part: metadata
+// part: query
 
-skip = "Druid does not support CREATE/DROP TABLE DDL"
+-- Druid requires GROUP BY and LIMIT when ordering by a non-time column.
+-- Since idx is unique, grouping preserves the fixture rows.
+SELECT res
+FROM test_float32
+GROUP BY idx, res
+ORDER BY idx
+LIMIT 100

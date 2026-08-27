@@ -20,9 +20,9 @@ import pytest
 from adbc_drivers_validation.tests.conftest import (  # noqa: F401
     conn,
     conn_factory,
+    db_kwargs,
     manual_test,
     noci,
-    pytest_addoption,
     pytest_collection_modifyitems,
 )
 
@@ -49,5 +49,5 @@ def driver_path(driver: adbc_drivers_validation.model.DriverQuirks) -> str:
     }.get(sys.platform, "so")
     return str(
         Path(__file__).parent.parent.parent
-        / f"target/debug/libadbc_driver_{driver.name}.{ext}"
+        / f"build/libadbc_driver_{driver.name}.{ext}"
     )

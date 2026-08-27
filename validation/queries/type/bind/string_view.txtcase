@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// part: metadata
+// part: bind_query
 
-skip = "Druid does not support CREATE/DROP TABLE DDL"
+-- Druid represents Arrow string views as VARCHAR results.
+SELECT CAST($1 AS VARCHAR) AS res

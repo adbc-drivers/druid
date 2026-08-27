@@ -271,7 +271,7 @@ struct DruidError {
 /// Default connection timeout
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default request timeout
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_mins(5);
 
 type Credentials = (String, String);
 

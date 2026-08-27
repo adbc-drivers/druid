@@ -17,3 +17,24 @@ limitations under the License.
 # ADBC Driver for Apache Druid
 
 An [ADBC driver](https://arrow.apache.org/adbc/current/index.html) for [Apache Druid](https://druid.apache.org).
+
+## Local Druid
+
+The repository includes a single-container Apache Druid 36 micro-quickstart environment. Start it with:
+
+```bash
+docker compose up --detach --wait test-service
+```
+
+The Druid SQL API and web console are available at <http://localhost:8888>. The container starts without any datasources; loading test data is a separate step.
+
+Verify it with a simple query:
+
+```bash
+curl --fail --silent --show-error \
+  --header 'Content-Type: application/json' \
+  --data '{"query":"SELECT 1","resultFormat":"array"}' \
+  http://localhost:8888/druid/v2/sql
+```
+
+Stop the stack with `docker compose down`. To also remove its persisted metadata and segments, run `docker compose down --volumes`.

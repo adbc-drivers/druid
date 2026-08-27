@@ -16,12 +16,15 @@ use crate::client::SqlParameter;
 use adbc_core::error::{Error, Result, Status};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Date64Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    Date32Type, Date64Type, Decimal128Type, DecimalType, Float16Type, Float32Type, Float64Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, TimeUnit};
+use chrono::{NaiveDate, TimeDelta};
+
+const MILLIS_PER_DAY: i64 = 86_400_000;
 
 /// Maps an Arrow `DataType` to the corresponding Druid SQL type name.
 pub(crate) fn arrow_to_druid_type(data_type: &DataType) -> Result<&'static str> {
@@ -34,17 +37,32 @@ pub(crate) fn arrow_to_druid_type(data_type: &DataType) -> Result<&'static str> 
         | DataType::UInt16
         | DataType::UInt32
         | DataType::UInt64 => Ok("BIGINT"),
-        DataType::Float32 => Ok("FLOAT"),
-        DataType::Float64 => Ok("DOUBLE"),
+        DataType::Float16 | DataType::Float32 => Ok("FLOAT"),
+        DataType::Float64 | DataType::Decimal128(_, _) => Ok("DOUBLE"),
         DataType::Boolean => Ok("BOOLEAN"),
-        DataType::Utf8 | DataType::LargeUtf8 => Ok("VARCHAR"),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok("VARCHAR"),
         DataType::Timestamp(_, _) => Ok("TIMESTAMP"),
         DataType::Date32 | DataType::Date64 => Ok("DATE"),
+        DataType::Dictionary(_, value_type) => arrow_to_druid_type(value_type),
         _ => Err(Error::with_message_and_status(
             format!("Unsupported Arrow type for Druid parameter: {data_type}"),
             Status::InvalidArguments,
         )),
     }
+}
+
+/// Converts an Arrow date value to the ISO-8601 representation expected by Druid.
+fn date_to_json(days_since_epoch: i64) -> Result<serde_json::Value> {
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).expect("1970-01-01 is a valid date");
+    let date = TimeDelta::try_days(days_since_epoch)
+        .and_then(|offset| epoch.checked_add_signed(offset))
+        .ok_or_else(|| {
+            Error::with_message_and_status(
+                format!("Arrow date is outside Druid's supported range: {days_since_epoch}"),
+                Status::InvalidArguments,
+            )
+        })?;
+    Ok(serde_json::json!(date.format("%Y-%m-%d").to_string()))
 }
 
 /// Extracts a value from an Arrow array at a given row index as JSON.
@@ -78,15 +96,33 @@ fn extract_value(array: &ArrayRef, row: usize) -> Result<serde_json::Value> {
         DataType::UInt64 => Ok(serde_json::json!(
             array.as_primitive::<UInt64Type>().value(row)
         )),
+        DataType::Float16 => Ok(serde_json::json!(
+            array.as_primitive::<Float16Type>().value(row).to_f32()
+        )),
         DataType::Float32 => Ok(serde_json::json!(
             array.as_primitive::<Float32Type>().value(row)
         )),
         DataType::Float64 => Ok(serde_json::json!(
             array.as_primitive::<Float64Type>().value(row)
         )),
+        DataType::Decimal128(precision, scale) => {
+            let value = Decimal128Type::format_decimal(
+                array.as_primitive::<Decimal128Type>().value(row),
+                *precision,
+                *scale,
+            );
+            let value = value.parse::<f64>().map_err(|error| {
+                Error::with_message_and_status(
+                    format!("Failed to convert decimal parameter to DOUBLE: {error}"),
+                    Status::InvalidArguments,
+                )
+            })?;
+            Ok(serde_json::json!(value))
+        }
         DataType::Boolean => Ok(serde_json::json!(array.as_boolean().value(row))),
         DataType::Utf8 => Ok(serde_json::json!(array.as_string::<i32>().value(row))),
         DataType::LargeUtf8 => Ok(serde_json::json!(array.as_string::<i64>().value(row))),
+        DataType::Utf8View => Ok(serde_json::json!(array.as_string_view().value(row))),
         DataType::Timestamp(TimeUnit::Second, _) => Ok(serde_json::json!(
             array.as_primitive::<TimestampSecondType>().value(row)
         )),
@@ -99,12 +135,17 @@ fn extract_value(array: &ArrayRef, row: usize) -> Result<serde_json::Value> {
         DataType::Timestamp(TimeUnit::Nanosecond, _) => Ok(serde_json::json!(
             array.as_primitive::<TimestampNanosecondType>().value(row)
         )),
-        DataType::Date32 => Ok(serde_json::json!(
-            array.as_primitive::<Date32Type>().value(row)
-        )),
-        DataType::Date64 => Ok(serde_json::json!(
-            array.as_primitive::<Date64Type>().value(row)
-        )),
+        DataType::Date32 => date_to_json(i64::from(array.as_primitive::<Date32Type>().value(row))),
+        DataType::Date64 => date_to_json(
+            array
+                .as_primitive::<Date64Type>()
+                .value(row)
+                .div_euclid(MILLIS_PER_DAY),
+        ),
+        DataType::Dictionary(_, _) => {
+            let dictionary = array.as_any_dictionary();
+            extract_value(dictionary.values(), dictionary.normalized_keys()[row])
+        }
         dt => Err(Error::with_message_and_status(
             format!("Unsupported Arrow type for Druid parameter value: {dt}"),
             Status::InvalidArguments,
@@ -131,8 +172,12 @@ pub(crate) fn build_parameters(batch: &RecordBatch) -> Result<Vec<SqlParameter>>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::ArrayRef;
-    use arrow_array::builder::{Float64Builder, Int64Builder, StringBuilder};
+    use arrow_array::builder::{
+        Date32Builder, Date64Builder, Float16Builder, Float64Builder, Int64Builder, StringBuilder,
+        StringDictionaryBuilder, StringViewBuilder,
+    };
+    use arrow_array::types::Int32Type;
+    use arrow_array::{ArrayRef, Decimal128Array};
     use arrow_schema::{Field, Schema};
     use std::sync::Arc;
 
@@ -173,9 +218,89 @@ mod tests {
     }
 
     #[test]
+    fn test_build_parameters_decimal128_as_double() {
+        let array: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![Some(12_345)])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        );
+        let batch = make_batch(vec![("p", array)]);
+
+        let params = build_parameters(&batch).unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].sql_type, "DOUBLE");
+        assert_eq!(params[0].value, serde_json::json!(123.45));
+    }
+
+    #[test]
+    fn test_build_parameters_date32_as_iso_string() {
+        let mut builder = Date32Builder::new();
+        builder.append_value(19_492);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("p", array)]);
+
+        let params = build_parameters(&batch).unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].sql_type, "DATE");
+        assert_eq!(params[0].value, serde_json::json!("2023-05-15"));
+    }
+
+    #[test]
+    fn test_build_parameters_date64_as_iso_string() {
+        let mut builder = Date64Builder::new();
+        builder.append_value(1_684_108_800_000);
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("p", array)]);
+
+        let params = build_parameters(&batch).unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].sql_type, "DATE");
+        assert_eq!(params[0].value, serde_json::json!("2023-05-15"));
+    }
+
+    #[test]
+    fn test_build_parameters_float16() {
+        let mut builder = Float16Builder::new();
+        builder.append_value(Default::default());
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("p", array)]);
+
+        let params = build_parameters(&batch).unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].sql_type, "FLOAT");
+        assert_eq!(params[0].value, serde_json::json!(0.0));
+    }
+
+    #[test]
     fn test_build_parameters_string() {
         let mut builder = StringBuilder::new();
         builder.append_value("hello");
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("p", array)]);
+
+        let params = build_parameters(&batch).unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].sql_type, "VARCHAR");
+        assert_eq!(params[0].value, serde_json::json!("hello"));
+    }
+
+    #[test]
+    fn test_build_parameters_string_view() {
+        let mut builder = StringViewBuilder::new();
+        builder.append_value("hello");
+        let array: ArrayRef = Arc::new(builder.finish());
+        let batch = make_batch(vec![("p", array)]);
+
+        let params = build_parameters(&batch).unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].sql_type, "VARCHAR");
+        assert_eq!(params[0].value, serde_json::json!("hello"));
+    }
+
+    #[test]
+    fn test_build_parameters_dictionary_string() {
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+        builder.append("hello").unwrap();
         let array: ArrayRef = Arc::new(builder.finish());
         let batch = make_batch(vec![("p", array)]);
 

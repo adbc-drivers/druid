@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// part: metadata
+
+[tags]
+partial-support = true
+caveats = ["Druid represents DECIMAL values as DOUBLE, so values can lose precision."]
+
 // part: expected_schema
 
 {

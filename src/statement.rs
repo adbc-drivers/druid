@@ -251,11 +251,14 @@ impl Optionable for DruidStatement {
         }
     }
 
-    fn get_option_bytes(&self, _key: Self::Option) -> Result<Vec<u8>> {
-        Err(Error::with_message_and_status(
-            "Druid context does not support bytes values".to_string(),
-            Status::NotImplemented,
-        ))
+    fn get_option_bytes(&self, key: Self::Option) -> Result<Vec<u8>> {
+        match self.get_context_value(&key)? {
+            OptionValue::Bytes(bytes) => Ok(bytes.clone()),
+            _ => Err(Error::with_message_and_status(
+                format!("Option {key:?} is not bytes"),
+                Status::InvalidArguments,
+            )),
+        }
     }
 
     fn get_option_int(&self, key: Self::Option) -> Result<i64> {
@@ -388,6 +391,14 @@ mod tests {
     }
 
     #[test]
+    fn test_get_unknown_option_bytes_returns_not_found() {
+        let stmt = DruidStatement::new(create_test_client());
+        let result = stmt.get_option_bytes(OptionStatement::Other("anything".to_string()));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::NotFound);
+    }
+
+    #[test]
     fn test_set_option_replaces_existing() {
         let mut stmt = DruidStatement::new(create_test_client());
         stmt.set_option(
@@ -403,14 +414,6 @@ mod tests {
 
         let retrieved = stmt.get_option_int(OptionStatement::Other("timeout".to_string()));
         assert_eq!(retrieved.unwrap(), 2000);
-    }
-
-    #[test]
-    fn test_get_option_bytes_returns_not_implemented() {
-        let stmt = DruidStatement::new(create_test_client());
-        let result = stmt.get_option_bytes(OptionStatement::Other("anything".to_string()));
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().status, Status::NotImplemented);
     }
 
     #[test]

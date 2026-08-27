@@ -12,6 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// part: metadata
+// part: bind_query
 
-skip = "Druid does not support CREATE/DROP TABLE DDL"
+-- Druid represents all integer parameters and results as LONG.
+SELECT CAST($1 AS BIGINT) AS res
+
+// part: expected_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "res",
+            "format": "l",
+            "flags": ["nullable"]
+        }
+    ]
+}
