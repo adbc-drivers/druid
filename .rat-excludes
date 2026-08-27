@@ -25,3 +25,4 @@ pixi.lock
 pixi.toml
 rust-toolchain.toml
 validation/pytest.ini
+.github/pull_request_template.md
