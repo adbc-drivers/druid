@@ -12,16 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.editorconfig
-.gitattributes
-.gitignore
-.rustfmt.toml
-AGENTS.md
-Cargo.lock
-Cargo.toml
-LICENSE
-license.tpl
-pixi.lock
-pixi.toml
-rust-toolchain.toml
-validation/pytest.ini
+# Configuration for cargo-about, used to generate license file reports.
+accepted = [
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+]
