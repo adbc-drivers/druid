@@ -57,6 +57,7 @@ def driver_path(driver: adbc_drivers_validation.model.DriverQuirks) -> str:
 @pytest.fixture(scope="session", autouse=True)
 def setup_druid_fixtures(
     driver: adbc_drivers_validation.model.DriverQuirks,
-    db_kwargs: dict[str, object],
+    request: pytest.FixtureRequest,
 ) -> None:
-    DruidFixtures(str(db_kwargs["uri"])).load(driver.query_set)
+    database_options = request.getfixturevalue("db_kwargs")
+    DruidFixtures(str(database_options["uri"])).load(driver.query_set)
