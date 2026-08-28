@@ -27,6 +27,7 @@ from adbc_drivers_validation.tests.conftest import (  # noqa: F401
 )
 
 from .druid import get_quirks
+from .druid_fixtures import DruidFixtures
 
 
 def pytest_addoption(parser):
@@ -51,3 +52,11 @@ def driver_path(driver: adbc_drivers_validation.model.DriverQuirks) -> str:
         Path(__file__).parent.parent.parent
         / f"build/libadbc_driver_{driver.name}.{ext}"
     )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_druid_fixtures(
+    driver: adbc_drivers_validation.model.DriverQuirks,
+    db_kwargs: dict[str, object],
+) -> None:
+    DruidFixtures(str(db_kwargs["uri"])).load(driver.query_set)

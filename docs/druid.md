@@ -50,3 +50,15 @@ connection = dbapi.connect(
 ```
 
 Note: The example above is for Python using the [adbc-driver-manager](https://pypi.org/project/adbc-driver-manager) package but the process will be similar for other driver managers. See [adbc-quickstarts](https://github.com/columnar-tech/adbc-quickstarts).
+
+## Options
+
+### Statement Options
+
+``druid.statement.<option_name>``
+: Type: string, integer, or double.
+
+  Sets a Druid SQL query-context parameter. The driver removes the
+  ``druid.statement.`` prefix and sends the remaining option name to Druid.
+  For example, ``druid.statement.timeout`` sets Druid's ``timeout`` context
+  parameter. Byte values are not supported.

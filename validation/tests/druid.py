@@ -12,14 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 import functools
-import typing
 from pathlib import Path
 
 from adbc_drivers_validation import model, quirks
-
-from .druid_fixtures import DruidFixtures
 
 
 class DruidQuirks(model.DriverQuirks):
@@ -48,7 +44,6 @@ class DruidQuirks(model.DriverQuirks):
         statement_bulk_ingest_temporary=False,
         statement_execute_schema=True,
         statement_get_parameter_schema=True,
-        statement_unknown_option_passthrough=True,
         statement_prepare=True,
         statement_rows_affected=True,
         statement_rows_affected_ddl=True,
@@ -67,13 +62,6 @@ class DruidQuirks(model.DriverQuirks):
     def is_table_not_found(self, table_name: str | None, error: Exception) -> bool:
         error_str = str(error).lower()
         return "not found" in error_str
-
-    @contextlib.contextmanager
-    def setup_validation(
-        self, database_options: typing.Mapping[str, typing.Any]
-    ) -> typing.Generator[None]:
-        DruidFixtures(str(database_options["uri"])).load(self.query_set)
-        yield
 
     def split_statement(self, statement: str) -> list[str]:
         return quirks.split_statement(statement, dialect=self.name)
