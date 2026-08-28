@@ -29,7 +29,9 @@ if __name__ == "__main__":
 
     reports = [report.resolve() for report in Path(".").glob("validation-report*.xml")]
     generate_documentation.generate(
-        get_quirks,
+        "druid",
+        lambda version, vendor: get_quirks(version),
+        [("druid", "Apache Druid")],
         reports,
         template,
         args.output.resolve(),
