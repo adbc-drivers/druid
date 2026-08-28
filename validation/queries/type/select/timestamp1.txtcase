@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// part: metadata
+
+[setup]
+drop = "test_timestamp1"
+
 // part: query
 
 -- Druid requires GROUP BY and LIMIT when ordering by a non-time column.
