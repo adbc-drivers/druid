@@ -15,14 +15,10 @@
 {}
 ---
 
-(driver-druid-prerelease)=
-# Druid Driver (unknown)
+{{ cross_reference|safe }}
+# Apache Druid Driver {{ version }}
 
-{badge-primary}`Driver Version|(unknown)` {badge-success}`Tested With|Apache Druid 36`
-
-:::{warning}
-This is documentation for a prerelease version.
-:::
+{{ heading|safe }}
 
 This driver provides access to [Apache Druid][druid], a high performance, real-time analytics database.
 
@@ -51,6 +47,16 @@ connection = dbapi.connect(
 
 Note: The example above is for Python using the [adbc-driver-manager](https://pypi.org/project/adbc-driver-manager) package but the process will be similar for other driver managers. See [adbc-quickstarts](https://github.com/columnar-tech/adbc-quickstarts).
 
+## Feature & Type Support
+
+{{ features|safe }}
+
+### Types
+
+{{ types|safe }}
+
+{{ footnotes|safe }}
+
 ## Options
 
 ### Statement Options
@@ -62,3 +68,9 @@ Note: The example above is for Python using the [adbc-driver-manager](https://py
   ``druid.statement.`` prefix and sends the remaining option name to Druid.
   For example, ``druid.statement.timeout`` sets Druid's ``timeout`` context
   parameter. Byte values are not supported.
+
+## Compatibility
+
+{{ compatibility_info|safe }}
+
+[druid]: https://druid.apache.org/
