@@ -13,6 +13,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "chrono",
+ "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",

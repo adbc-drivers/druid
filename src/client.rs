@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use adbc_core::error::{Error, Result, Status};
+use percent_encoding::percent_decode_str;
 use reqwest::blocking::Client;
+use reqwest::{Certificate, Url};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -275,6 +277,87 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_mins(5);
 
 type Credentials = (String, String);
 
+struct ConnectionUri {
+    base_url: String,
+    username: Option<String>,
+    password: Option<String>,
+    ssl_cert_path: Option<String>,
+}
+
+fn parse_connection_uri(base_url: String) -> Result<ConnectionUri> {
+    let (base_url, is_druid_uri) = match base_url.strip_prefix("druid://") {
+        Some(endpoint) => (format!("https://{endpoint}"), true),
+        None => (base_url, false),
+    };
+
+    let mut url = Url::parse(&base_url).map_err(|error| {
+        Error::with_message_and_status(
+            format!("Invalid Druid URI: {error}"),
+            Status::InvalidArguments,
+        )
+    })?;
+
+    if is_druid_uri {
+        let use_https = !url
+            .query_pairs()
+            .any(|(name, value)| name == "SSL" && value.eq_ignore_ascii_case("false"));
+        url.set_scheme(if use_https { "https" } else { "http" })
+            .expect("HTTP and HTTPS are valid URL schemes");
+    }
+
+    let ssl_cert_path = url
+        .query_pairs()
+        .find(|(name, _)| name == "SSLCertPath")
+        .map(|(_, value)| value.into_owned());
+    if ssl_cert_path.is_some() && url.scheme() != "https" {
+        return Err(Error::with_message_and_status(
+            "SSLCertPath requires HTTPS".to_string(),
+            Status::InvalidArguments,
+        ));
+    }
+    url.set_query(None);
+
+    let username = (!url.username().is_empty())
+        .then(|| decode_uri_credential(url.username(), "username"))
+        .transpose()?;
+    let password = url
+        .password()
+        .map(|password| decode_uri_credential(password, "password"))
+        .transpose()?;
+
+    url.set_password(None).map_err(|()| {
+        Error::with_message_and_status(
+            "Invalid Druid URI password".to_string(),
+            Status::InvalidArguments,
+        )
+    })?;
+    url.set_username("").map_err(|()| {
+        Error::with_message_and_status(
+            "Invalid Druid URI username".to_string(),
+            Status::InvalidArguments,
+        )
+    })?;
+
+    Ok(ConnectionUri {
+        base_url: url.as_str().trim_end_matches('/').to_string(),
+        username,
+        password,
+        ssl_cert_path,
+    })
+}
+
+fn decode_uri_credential(value: &str, name: &str) -> Result<String> {
+    percent_decode_str(value)
+        .decode_utf8()
+        .map(std::borrow::Cow::into_owned)
+        .map_err(|error| {
+            Error::with_message_and_status(
+                format!("Invalid Druid URI {name}: {error}"),
+                Status::InvalidArguments,
+            )
+        })
+}
+
 #[derive(Debug)]
 pub struct DruidClient {
     client: Client,
@@ -290,7 +373,7 @@ impl DruidClient {
     /// - Request timeout: 300 seconds (5 minutes)
     ///
     /// # Errors
-    /// Returns an error if the HTTP client fails to build.
+    /// Returns an error if the Druid URI is invalid or the HTTP client fails to build.
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
         Self::with_auth(base_url, None, None)
     }
@@ -307,7 +390,8 @@ impl DruidClient {
     /// * `password` - Optional password for HTTP Basic Authentication
     ///
     /// # Errors
-    /// Returns an error if the HTTP client fails to build.
+    /// Returns an error if the Druid URI is invalid, the HTTP client fails to build,
+    /// or only one authentication credential is provided.
     pub fn with_auth(
         base_url: impl Into<String>,
         username: Option<String>,
@@ -330,7 +414,7 @@ impl DruidClient {
     /// * `request_timeout` - Maximum time to wait for a complete response
     ///
     /// # Errors
-    /// Returns an error if the HTTP client fails to build.
+    /// Returns an error if the Druid URI is invalid or the HTTP client fails to build.
     pub fn with_timeouts(
         base_url: impl Into<String>,
         connect_timeout: Duration,
@@ -349,7 +433,8 @@ impl DruidClient {
     /// * `request_timeout` - Maximum time to wait for a complete response
     ///
     /// # Errors
-    /// Returns an error if the HTTP client fails to build.
+    /// Returns an error if the Druid URI is invalid, the HTTP client fails to build,
+    /// or only one authentication credential is provided.
     pub fn with_auth_and_timeouts(
         base_url: impl Into<String>,
         username: Option<String>,
@@ -357,16 +442,34 @@ impl DruidClient {
         connect_timeout: Duration,
         request_timeout: Duration,
     ) -> Result<Self> {
-        let client = Client::builder()
+        let connection_uri = parse_connection_uri(base_url.into())?;
+        let username = username.or(connection_uri.username);
+        let password = password.or(connection_uri.password);
+
+        let mut client = Client::builder()
             .connect_timeout(connect_timeout)
-            .timeout(request_timeout)
-            .build()
-            .map_err(|e| {
+            .timeout(request_timeout);
+        if let Some(path) = connection_uri.ssl_cert_path {
+            let certificate = std::fs::read(&path).map_err(|error| {
                 Error::with_message_and_status(
-                    format!("Failed to build HTTP client: {e}"),
-                    Status::Internal,
+                    format!("Failed to read TLS certificate '{path}': {error}"),
+                    Status::IO,
                 )
             })?;
+            let certificate = Certificate::from_pem(&certificate).map_err(|error| {
+                Error::with_message_and_status(
+                    format!("Failed to parse TLS certificate '{path}': {error}"),
+                    Status::InvalidArguments,
+                )
+            })?;
+            client = client.add_root_certificate(certificate);
+        }
+        let client = client.build().map_err(|e| {
+            Error::with_message_and_status(
+                format!("Failed to build HTTP client: {e}"),
+                Status::Internal,
+            )
+        })?;
 
         let credentials = match (&username, &password) {
             (Some(_), None) => {
@@ -386,7 +489,7 @@ impl DruidClient {
 
         Ok(Self {
             client,
-            base_url: base_url.into(),
+            base_url: connection_uri.base_url,
             credentials,
         })
     }
@@ -579,6 +682,79 @@ mod tests {
     fn test_new_client_without_auth() {
         let client = DruidClient::new("http://localhost:8888").unwrap();
         assert!(client.credentials.is_none());
+    }
+
+    #[test]
+    fn test_new_client_normalizes_druid_uri_to_https() {
+        let client = DruidClient::new("druid://localhost:8888").unwrap();
+        assert_eq!(client.base_url, "https://localhost:8888");
+    }
+
+    #[test]
+    fn test_new_client_disables_https_with_ssl_false() {
+        let client = DruidClient::new("druid://localhost:8888?SSL=false").unwrap();
+        assert_eq!(client.base_url, "http://localhost:8888");
+    }
+
+    #[test]
+    fn test_new_client_rejects_missing_ssl_cert_path() {
+        let result =
+            DruidClient::new("druid://localhost:8888?SSLCertPath=/path/that/does/not/exist");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::IO);
+    }
+
+    #[test]
+    fn test_new_client_rejects_ssl_cert_path_without_https() {
+        let result = DruidClient::new(
+            "druid://localhost:8888?SSL=false&SSLCertPath=/path/that/does/not/exist",
+        );
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.status, Status::InvalidArguments);
+        assert_eq!(error.message, "SSLCertPath requires HTTPS");
+    }
+
+    #[test]
+    fn test_new_client_uses_credentials_from_uri() {
+        let client = DruidClient::new("druid://admin:secret@localhost:8888").unwrap();
+        assert_eq!(client.base_url, "https://localhost:8888");
+        assert_eq!(
+            client.credentials,
+            Some(("admin".to_string(), "secret".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_new_client_decodes_credentials_from_uri() {
+        let client =
+            DruidClient::new("druid://user%40example.com:p%40ss%2Fword@localhost").unwrap();
+        assert_eq!(
+            client.credentials,
+            Some(("user@example.com".to_string(), "p@ss/word".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_explicit_credentials_override_uri_credentials() {
+        let client = DruidClient::with_auth(
+            "druid://old:credentials@localhost",
+            Some("admin".to_string()),
+            Some("secret".to_string()),
+        )
+        .unwrap();
+        assert_eq!(client.base_url, "https://localhost");
+        assert_eq!(
+            client.credentials,
+            Some(("admin".to_string(), "secret".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_uri_username_without_password_fails() {
+        let result = DruidClient::new("druid://admin@localhost");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::InvalidArguments);
     }
 
     #[test]

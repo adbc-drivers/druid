@@ -15,11 +15,24 @@
 name: druid
 
 services:
+  cert-generator:
+    image: alpine:latest
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        apk add --no-cache openssl >/dev/null
+        /bin/sh /work/certs/generate-certs.sh
+    volumes:
+      - ./ci/docker/certs:/work/certs
+
   test-service:
     image: apache/druid:36.0.0
     platform: linux/amd64
     working_dir: /opt/druid
     entrypoint: ["/bin/bash", "/opt/druid/ci/start-druid.sh"]
+    depends_on:
+      cert-generator:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -35,9 +48,12 @@ services:
       start_period: 30s
     ports:
       - "8888:8888"
+      - "9088:9088"
     stop_grace_period: 1m
     volumes:
       - ./ci/docker/druid/start-druid.sh:/opt/druid/ci/start-druid.sh:ro
+      - ./ci/docker/druid/router-runtime.properties:/opt/druid/conf/druid/single-server/micro-quickstart/router/runtime.properties:ro
+      - ./ci/docker/certs:/opt/druid/ci/certs:ro
       - druid-data:/opt/druid/var
 
 volumes:

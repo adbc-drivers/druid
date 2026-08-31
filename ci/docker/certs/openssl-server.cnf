@@ -12,13 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import adbc_driver_manager.dbapi
+# OpenSSL config for the localhost certificate mounted into Druid.
 
+[ req ]
+default_bits = 2048
+prompt = no
+default_md = sha256
+distinguished_name = dn
+req_extensions = v3_req
 
-def test_package() -> None:
-    # The package test does not start Druid; verify that the installed driver loads.
-    with adbc_driver_manager.dbapi.connect(
-        driver="druid",
-        uri="druid://localhost:8888?SSL=false",
-    ):
-        pass
+[ dn ]
+CN = localhost
+
+[ v3_req ]
+basicConstraints = critical, CA:false
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.1 = localhost
+IP.1 = 127.0.0.1
