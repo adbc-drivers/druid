@@ -1,6 +1,10 @@
 # Cargo
 /target
 
+# Build output
+/build/
+.doit.db
+
 # Pixi environments
 .pixi/*
 !.pixi/config.toml

@@ -35,7 +35,9 @@ class DruidQuirks(model.DriverQuirks):
         get_objects_constraints_foreign=False,
         get_objects_constraints_primary=False,
         get_objects_constraints_unique=False,
+        select_fixture_setup=False,
         statement_bind=True,
+        statement_bind_test_mode="select",
         statement_bulk_ingest=False,
         statement_bulk_ingest_catalog=False,
         statement_bulk_ingest_schema=False,
@@ -48,7 +50,7 @@ class DruidQuirks(model.DriverQuirks):
         supported_xdbc_fields=[],
     )
     setup = model.DriverSetup(
-        database={"uri": "http://localhost:8888"},
+        database={"uri": model.FromEnv("DRUID_URI")},
         connection={},
         statement={},
     )
@@ -57,7 +59,7 @@ class DruidQuirks(model.DriverQuirks):
     def queries_paths(self) -> tuple[Path]:
         return (Path(__file__).parent.parent / "queries",)
 
-    def is_table_not_found(self, table_name: str, error: Exception) -> bool:
+    def is_table_not_found(self, table_name: str | None, error: Exception) -> bool:
         error_str = str(error).lower()
         return "not found" in error_str
 

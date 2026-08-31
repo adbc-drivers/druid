@@ -14,4 +14,15 @@
 
 // part: metadata
 
-skip = "Druid does not support CREATE/DROP TABLE DDL"
+[setup]
+drop = "test_timestamp1"
+
+// part: query
+
+-- Druid requires GROUP BY and LIMIT when ordering by a non-time column.
+-- Since idx is unique, grouping preserves the fixture rows.
+SELECT MILLIS_TO_TIMESTAMP(res) AS res
+FROM test_timestamp1
+GROUP BY idx, res
+ORDER BY idx
+LIMIT 100

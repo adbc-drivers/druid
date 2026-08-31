@@ -14,4 +14,25 @@
 
 // part: metadata
 
-skip = "Druid does not support CREATE/DROP TABLE DDL"
+[tags]
+partial-support = true
+caveats = ["Druid 36 rejects NULL DATE query parameters, so NULL binding is not supported."]
+
+// part: bind_query
+
+-- Druid accepts DATE parameters as ISO-8601 strings but rejects NULL DATE parameters.
+SELECT CAST($1 AS DATE) AS res
+
+// part: bind
+
+{"res": 19492}
+{"res": -719162}
+{"res": -165}
+{"res": 2932896}
+
+// part: expected
+
+{"res": -719162}
+{"res": -165}
+{"res": 19492}
+{"res": 2932896}

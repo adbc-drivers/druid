@@ -14,4 +14,32 @@
 
 // part: metadata
 
-skip = "Druid does not support CREATE/DROP TABLE DDL"
+[tags]
+partial-support = true
+caveats = ["Druid represents DECIMAL values as DOUBLE, so values can lose precision."]
+
+// part: bind_query
+
+-- Druid evaluates DECIMAL parameters using DOUBLE arithmetic.
+SELECT CAST($1 AS DOUBLE) AS res
+
+// part: expected_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "res",
+            "format": "g",
+            "flags": ["nullable"]
+        }
+    ]
+}
+
+// part: expected
+
+{"res": null}
+{"res": -999.99}
+{"res": 0.0}
+{"res": 123.45}
+{"res": 9999999.99}

@@ -14,4 +14,37 @@
 
 // part: metadata
 
-skip = "Druid does not support CREATE/DROP TABLE DDL"
+[tags]
+partial-support = true
+caveats = ["Druid represents DECIMAL values as DOUBLE, so values can lose precision."]
+
+// part: query
+
+-- Druid requires GROUP BY and LIMIT when ordering by a non-time column.
+-- Since idx is unique, grouping preserves the fixture rows.
+SELECT res
+FROM test_decimal
+GROUP BY idx, res
+ORDER BY idx
+LIMIT 100
+
+// part: expected_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "res",
+            "format": "g",
+            "flags": ["nullable"]
+        }
+    ]
+}
+
+// part: expected
+
+{"res": 123.45}
+{"res": 0.0}
+{"res": -999.99}
+{"res": 9999999.99}
+{"res": null}

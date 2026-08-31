@@ -14,4 +14,4 @@
 
 // part: metadata
 
-skip = "Druid does not support CREATE/DROP TABLE DDL"
+skip = "Druid does not support TIME"

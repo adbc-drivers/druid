@@ -24,6 +24,8 @@ use arrow_select::concat::concat_batches;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+const DRUID_STATEMENT_OPTION_PREFIX: &str = "druid.statement.";
+
 #[derive(Debug)]
 pub struct DruidStatement {
     client: Arc<DruidClient>,
@@ -85,12 +87,23 @@ impl DruidStatement {
     /// or if the key is a standard ADBC option (which Druid doesn't support).
     fn get_context_value(&self, key: &OptionStatement) -> Result<&OptionValue> {
         match key {
-            OptionStatement::Other(name) => self.context.get(name).ok_or_else(|| {
-                Error::with_message_and_status(
-                    format!("Option '{name}' not found"),
-                    Status::NotFound,
-                )
-            }),
+            OptionStatement::Other(name) => {
+                let context_name = name
+                    .strip_prefix(DRUID_STATEMENT_OPTION_PREFIX)
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| {
+                        Error::with_message_and_status(
+                            format!("Option '{name}' not found"),
+                            Status::NotFound,
+                        )
+                    })?;
+                self.context.get(context_name).ok_or_else(|| {
+                    Error::with_message_and_status(
+                        format!("Option '{name}' not found"),
+                        Status::NotFound,
+                    )
+                })
+            }
             _ => Err(Error::with_message_and_status(
                 format!("Option {key:?} is not supported by Druid driver"),
                 Status::NotImplemented,
@@ -225,13 +238,22 @@ impl Optionable for DruidStatement {
     fn set_option(&mut self, key: Self::Option, value: OptionValue) -> Result<()> {
         match key {
             OptionStatement::Other(name) => {
+                let context_name = name
+                    .strip_prefix(DRUID_STATEMENT_OPTION_PREFIX)
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| {
+                        Error::with_message_and_status(
+                            format!("Option '{name}' is not supported by Druid driver"),
+                            Status::NotImplemented,
+                        )
+                    })?;
                 if matches!(value, OptionValue::Bytes(_)) {
                     return Err(Error::with_message_and_status(
                         "Druid context does not support bytes values".to_string(),
                         Status::NotImplemented,
                     ));
                 }
-                self.context.insert(name, value);
+                self.context.insert(context_name.to_string(), value);
                 Ok(())
             }
             _ => Err(Error::with_message_and_status(
@@ -251,11 +273,14 @@ impl Optionable for DruidStatement {
         }
     }
 
-    fn get_option_bytes(&self, _key: Self::Option) -> Result<Vec<u8>> {
-        Err(Error::with_message_and_status(
-            "Druid context does not support bytes values".to_string(),
-            Status::NotImplemented,
-        ))
+    fn get_option_bytes(&self, key: Self::Option) -> Result<Vec<u8>> {
+        match self.get_context_value(&key)? {
+            OptionValue::Bytes(bytes) => Ok(bytes.clone()),
+            _ => Err(Error::with_message_and_status(
+                format!("Option {key:?} is not bytes"),
+                Status::InvalidArguments,
+            )),
+        }
     }
 
     fn get_option_int(&self, key: Self::Option) -> Result<i64> {
@@ -291,16 +316,20 @@ mod tests {
 
     // ========== Optionable tests ==========
 
+    fn context_option(name: &str) -> OptionStatement {
+        OptionStatement::Other(format!("druid.statement.{name}"))
+    }
+
     #[test]
     fn test_set_option_stores_string_value() {
         let mut stmt = DruidStatement::new(create_test_client());
         let result = stmt.set_option(
-            OptionStatement::Other("sqlTimeZone".to_string()),
+            context_option("sqlTimeZone"),
             OptionValue::String("America/New_York".to_string()),
         );
         assert!(result.is_ok());
 
-        let retrieved = stmt.get_option_string(OptionStatement::Other("sqlTimeZone".to_string()));
+        let retrieved = stmt.get_option_string(context_option("sqlTimeZone"));
         assert!(retrieved.is_ok());
         assert_eq!(retrieved.unwrap(), "America/New_York");
     }
@@ -308,13 +337,10 @@ mod tests {
     #[test]
     fn test_set_option_stores_int_value() {
         let mut stmt = DruidStatement::new(create_test_client());
-        let result = stmt.set_option(
-            OptionStatement::Other("timeout".to_string()),
-            OptionValue::Int(30000),
-        );
+        let result = stmt.set_option(context_option("timeout"), OptionValue::Int(30000));
         assert!(result.is_ok());
 
-        let retrieved = stmt.get_option_int(OptionStatement::Other("timeout".to_string()));
+        let retrieved = stmt.get_option_int(context_option("timeout"));
         assert!(retrieved.is_ok());
         assert_eq!(retrieved.unwrap(), 30000);
     }
@@ -322,13 +348,10 @@ mod tests {
     #[test]
     fn test_set_option_stores_double_value() {
         let mut stmt = DruidStatement::new(create_test_client());
-        let result = stmt.set_option(
-            OptionStatement::Other("someDouble".to_string()),
-            OptionValue::Double(3.14),
-        );
+        let result = stmt.set_option(context_option("someDouble"), OptionValue::Double(3.14));
         assert!(result.is_ok());
 
-        let retrieved = stmt.get_option_double(OptionStatement::Other("someDouble".to_string()));
+        let retrieved = stmt.get_option_double(context_option("someDouble"));
         assert!(retrieved.is_ok());
         assert!((retrieved.unwrap() - 3.14).abs() < f64::EPSILON);
     }
@@ -337,9 +360,33 @@ mod tests {
     fn test_set_option_bytes_returns_not_implemented() {
         let mut stmt = DruidStatement::new(create_test_client());
         let result = stmt.set_option(
-            OptionStatement::Other("someBytes".to_string()),
+            context_option("someBytes"),
             OptionValue::Bytes(vec![1, 2, 3]),
         );
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::NotImplemented);
+    }
+
+    #[test]
+    fn test_set_unknown_option_returns_not_implemented() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let result = stmt.set_option(
+            OptionStatement::Other("this_option_does_not_exist".to_string()),
+            OptionValue::String("value".to_string()),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::NotImplemented);
+    }
+
+    #[test]
+    fn test_set_empty_context_option_returns_not_implemented() {
+        let mut stmt = DruidStatement::new(create_test_client());
+        let result = stmt.set_option(
+            OptionStatement::Other("druid.statement.".to_string()),
+            OptionValue::String("value".to_string()),
+        );
+
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().status, Status::NotImplemented);
     }
@@ -368,13 +415,10 @@ mod tests {
     #[test]
     fn test_get_option_string_wrong_type_returns_error() {
         let mut stmt = DruidStatement::new(create_test_client());
-        stmt.set_option(
-            OptionStatement::Other("timeout".to_string()),
-            OptionValue::Int(30000),
-        )
-        .unwrap();
+        stmt.set_option(context_option("timeout"), OptionValue::Int(30000))
+            .unwrap();
 
-        let result = stmt.get_option_string(OptionStatement::Other("timeout".to_string()));
+        let result = stmt.get_option_string(context_option("timeout"));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().status, Status::InvalidArguments);
     }
@@ -382,7 +426,15 @@ mod tests {
     #[test]
     fn test_get_option_not_found_returns_error() {
         let stmt = DruidStatement::new(create_test_client());
-        let result = stmt.get_option_string(OptionStatement::Other("nonexistent".to_string()));
+        let result = stmt.get_option_string(context_option("nonexistent"));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status, Status::NotFound);
+    }
+
+    #[test]
+    fn test_get_unknown_option_bytes_returns_not_found() {
+        let stmt = DruidStatement::new(create_test_client());
+        let result = stmt.get_option_bytes(OptionStatement::Other("anything".to_string()));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().status, Status::NotFound);
     }
@@ -390,27 +442,13 @@ mod tests {
     #[test]
     fn test_set_option_replaces_existing() {
         let mut stmt = DruidStatement::new(create_test_client());
-        stmt.set_option(
-            OptionStatement::Other("timeout".to_string()),
-            OptionValue::Int(1000),
-        )
-        .unwrap();
-        stmt.set_option(
-            OptionStatement::Other("timeout".to_string()),
-            OptionValue::Int(2000),
-        )
-        .unwrap();
+        stmt.set_option(context_option("timeout"), OptionValue::Int(1000))
+            .unwrap();
+        stmt.set_option(context_option("timeout"), OptionValue::Int(2000))
+            .unwrap();
 
-        let retrieved = stmt.get_option_int(OptionStatement::Other("timeout".to_string()));
+        let retrieved = stmt.get_option_int(context_option("timeout"));
         assert_eq!(retrieved.unwrap(), 2000);
-    }
-
-    #[test]
-    fn test_get_option_bytes_returns_not_implemented() {
-        let stmt = DruidStatement::new(create_test_client());
-        let result = stmt.get_option_bytes(OptionStatement::Other("anything".to_string()));
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().status, Status::NotImplemented);
     }
 
     #[test]
@@ -426,20 +464,14 @@ mod tests {
     fn test_build_context_converts_to_json() {
         let mut stmt = DruidStatement::new(create_test_client());
         stmt.set_option(
-            OptionStatement::Other("sqlTimeZone".to_string()),
+            context_option("sqlTimeZone"),
             OptionValue::String("America/New_York".to_string()),
         )
         .unwrap();
-        stmt.set_option(
-            OptionStatement::Other("timeout".to_string()),
-            OptionValue::Int(30000),
-        )
-        .unwrap();
-        stmt.set_option(
-            OptionStatement::Other("someDouble".to_string()),
-            OptionValue::Double(1.5),
-        )
-        .unwrap();
+        stmt.set_option(context_option("timeout"), OptionValue::Int(30000))
+            .unwrap();
+        stmt.set_option(context_option("someDouble"), OptionValue::Double(1.5))
+            .unwrap();
 
         let context = stmt.build_context();
 

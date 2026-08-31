@@ -32,6 +32,18 @@ fn get_or_not_found(opt: Option<&String>, name: &str) -> Result<String> {
         .ok_or_else(|| Error::with_message_and_status(format!("{name} not set"), Status::NotFound))
 }
 
+fn get_option_error(key: &OptionDatabase, expected_type: &str) -> Error {
+    match key {
+        OptionDatabase::Other(_) => {
+            Error::with_message_and_status(format!("Option {key:?} not found"), Status::NotFound)
+        }
+        _ => Error::with_message_and_status(
+            format!("Option {key:?} is not {expected_type}"),
+            Status::InvalidArguments,
+        ),
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct DruidDatabase {
     uri: Option<String>,
@@ -92,30 +104,21 @@ impl Optionable for DruidDatabase {
             OptionDatabase::Password => get_or_not_found(self.password.as_ref(), "Password"),
             _ => Err(Error::with_message_and_status(
                 format!("Unsupported option: {key:?}"),
-                Status::NotImplemented,
+                Status::NotFound,
             )),
         }
     }
 
-    fn get_option_bytes(&self, _key: Self::Option) -> Result<Vec<u8>> {
-        Err(Error::with_message_and_status(
-            "get_option_bytes not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+    fn get_option_bytes(&self, key: Self::Option) -> Result<Vec<u8>> {
+        Err(get_option_error(&key, "bytes"))
     }
 
-    fn get_option_int(&self, _key: Self::Option) -> Result<i64> {
-        Err(Error::with_message_and_status(
-            "get_option_int not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+    fn get_option_int(&self, key: Self::Option) -> Result<i64> {
+        Err(get_option_error(&key, "an integer"))
     }
 
-    fn get_option_double(&self, _key: Self::Option) -> Result<f64> {
-        Err(Error::with_message_and_status(
-            "get_option_double not implemented".to_string(),
-            Status::NotImplemented,
-        ))
+    fn get_option_double(&self, key: Self::Option) -> Result<f64> {
+        Err(get_option_error(&key, "a double"))
     }
 }
 
