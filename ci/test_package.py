@@ -19,6 +19,6 @@ def test_package() -> None:
     # The package test does not start Druid; verify that the installed driver loads.
     with adbc_driver_manager.dbapi.connect(
         driver="druid",
-        uri="druid://localhost:8888?SSL=false",
+        uri="druid://localhost:8888?tls=false",
     ):
         pass

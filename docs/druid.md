@@ -40,7 +40,7 @@ from adbc_driver_manager import dbapi
 connection = dbapi.connect(
     driver="druid",
     db_kwargs={
-        "uri": "druid://localhost:8888?SSL=false",
+        "uri": "druid://localhost:8888?tls=false",
     },
 )
 ```
@@ -50,7 +50,7 @@ Note: The example above is for Python using the [adbc-driver-manager](https://py
 ### Connection String Format
 
 ```text
-druid://[username[:password]@]host[:port][/path][?SSL=true|false&SSLCertPath=path]
+druid://[username[:password]@]host[:port][/path][?tls=true|false&tls_ca=path]
 ```
 
 Components:
@@ -61,22 +61,22 @@ Components:
 - `host`: Druid Router or Broker host (required)
 - `port`: Service port (optional; defaults to 443 for HTTPS and 80 for HTTP)
 - `path`: Base path when Druid is exposed through a reverse proxy (optional)
-- `SSL`: Whether to use HTTPS; defaults to `true` and only applies to
+- `tls`: Whether to use HTTPS; defaults to `true` and only applies to
   `druid://` URIs
-- `SSLCertPath`: Path to a PEM CA certificate used to verify the server
+- `tls_ca`: Path to a PEM CA certificate used to verify the server
 
 #### HTTPS/SSL Configuration
 
 The `druid://` scheme uses HTTPS and the system trust store by default. To
-connect to a plaintext Druid endpoint, set `SSL=false`.
+connect to a plaintext Druid endpoint, set `tls=false`.
 
 Examples:
 
 - `druid://druid.example.com` → HTTPS on port 443
 - `druid://druid.example.com:9088` → HTTPS on port 9088
-- `druid://localhost:9088?SSLCertPath=/path/to/ca.crt` → HTTPS with a
+- `druid://localhost:9088?tls_ca=/path/to/ca.crt` → HTTPS with a
   custom CA
-- `druid://localhost:8888?SSL=false` → HTTP on port 8888
+- `druid://localhost:8888?tls=false` → HTTP on port 8888
 - `https://druid.example.com:9088` → Explicit HTTPS URL
 - `http://localhost:8888` → Explicit HTTP URL
 

@@ -281,7 +281,7 @@ struct ConnectionUri {
     base_url: String,
     username: Option<String>,
     password: Option<String>,
-    ssl_cert_path: Option<String>,
+    tls_ca: Option<String>,
 }
 
 fn parse_connection_uri(base_url: String) -> Result<ConnectionUri> {
@@ -298,20 +298,32 @@ fn parse_connection_uri(base_url: String) -> Result<ConnectionUri> {
     })?;
 
     if is_druid_uri {
-        let use_https = !url
+        let tls = url
             .query_pairs()
-            .any(|(name, value)| name == "SSL" && value.eq_ignore_ascii_case("false"));
+            .find(|(name, _)| name == "tls")
+            .map(|(_, value)| value.into_owned());
+        let use_https = match tls.as_deref() {
+            None => true,
+            Some(value) if value.eq_ignore_ascii_case("true") => true,
+            Some(value) if value.eq_ignore_ascii_case("false") => false,
+            Some(value) => {
+                return Err(Error::with_message_and_status(
+                    format!("Invalid tls value '{value}': expected true or false"),
+                    Status::InvalidArguments,
+                ));
+            }
+        };
         url.set_scheme(if use_https { "https" } else { "http" })
             .expect("HTTP and HTTPS are valid URL schemes");
     }
 
-    let ssl_cert_path = url
+    let tls_ca = url
         .query_pairs()
-        .find(|(name, _)| name == "SSLCertPath")
+        .find(|(name, _)| name == "tls_ca")
         .map(|(_, value)| value.into_owned());
-    if ssl_cert_path.is_some() && url.scheme() != "https" {
+    if tls_ca.is_some() && url.scheme() != "https" {
         return Err(Error::with_message_and_status(
-            "SSLCertPath requires HTTPS".to_string(),
+            "tls_ca requires TLS".to_string(),
             Status::InvalidArguments,
         ));
     }
@@ -342,7 +354,7 @@ fn parse_connection_uri(base_url: String) -> Result<ConnectionUri> {
         base_url: url.as_str().trim_end_matches('/').to_string(),
         username,
         password,
-        ssl_cert_path,
+        tls_ca,
     })
 }
 
@@ -449,7 +461,7 @@ impl DruidClient {
         let mut client = Client::builder()
             .connect_timeout(connect_timeout)
             .timeout(request_timeout);
-        if let Some(path) = connection_uri.ssl_cert_path {
+        if let Some(path) = connection_uri.tls_ca {
             let certificate = std::fs::read(&path).map_err(|error| {
                 Error::with_message_and_status(
                     format!("Failed to read TLS certificate '{path}': {error}"),
@@ -691,28 +703,38 @@ mod tests {
     }
 
     #[test]
-    fn test_new_client_disables_https_with_ssl_false() {
-        let client = DruidClient::new("druid://localhost:8888?SSL=false").unwrap();
+    fn test_new_client_disables_https_with_tls_false() {
+        let client = DruidClient::new("druid://localhost:8888?tls=false").unwrap();
         assert_eq!(client.base_url, "http://localhost:8888");
     }
 
     #[test]
-    fn test_new_client_rejects_missing_ssl_cert_path() {
-        let result =
-            DruidClient::new("druid://localhost:8888?SSLCertPath=/path/that/does/not/exist");
+    fn test_new_client_rejects_invalid_tls_value() {
+        let result = DruidClient::new("druid://localhost:8888?tls=invalid");
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.status, Status::InvalidArguments);
+        assert_eq!(
+            error.message,
+            "Invalid tls value 'invalid': expected true or false"
+        );
+    }
+
+    #[test]
+    fn test_new_client_rejects_missing_tls_ca() {
+        let result = DruidClient::new("druid://localhost:8888?tls_ca=/path/that/does/not/exist");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().status, Status::IO);
     }
 
     #[test]
-    fn test_new_client_rejects_ssl_cert_path_without_https() {
-        let result = DruidClient::new(
-            "druid://localhost:8888?SSL=false&SSLCertPath=/path/that/does/not/exist",
-        );
+    fn test_new_client_rejects_tls_ca_without_tls() {
+        let result =
+            DruidClient::new("druid://localhost:8888?tls=false&tls_ca=/path/that/does/not/exist");
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert_eq!(error.status, Status::InvalidArguments);
-        assert_eq!(error.message, "SSLCertPath requires HTTPS");
+        assert_eq!(error.message, "tls_ca requires TLS");
     }
 
     #[test]
