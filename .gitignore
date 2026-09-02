@@ -13,3 +13,7 @@
 validation-report.xml
 __pycache__/
 .pytest_cache/
+
+# Local TLS test certificates
+ci/docker/certs/ca.crt
+ci/docker/certs/localhost.p12

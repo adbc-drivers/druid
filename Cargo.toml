@@ -12,6 +12,7 @@ arrow-buffer = "57"
 arrow-schema = "57"
 arrow-select = "57"
 chrono = { version = "0.4.44", default-features = false, features = ["std"] }
+percent-encoding = "2"
 reqwest = { version = "0.13.2", features = ["json", "blocking"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

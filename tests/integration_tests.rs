@@ -32,7 +32,7 @@ fn get_connection() -> DruidConnection {
     let mut db = driver.new_database().unwrap();
     db.set_option(
         OptionDatabase::Uri,
-        OptionValue::String("http://localhost:8888".to_string()),
+        OptionValue::String("druid://localhost:8888?tls=false".to_string()),
     )
     .unwrap();
     db.new_connection().unwrap()

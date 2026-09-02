@@ -12,5 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-export DRUID_URI="druid://localhost:9088?tls_ca=${PWD}/ci/docker/certs/ca.crt"
-export DRUID_FIXTURES_URI="http://localhost:8888"
+# OpenSSL config for the self-signed CA used by the local Druid HTTPS endpoint.
+
+[ req ]
+default_bits = 2048
+prompt = no
+default_md = sha256
+distinguished_name = dn
+x509_extensions = v3_ca
+
+[ dn ]
+CN = Druid Local Test CA
+
+[ v3_ca ]
+basicConstraints = critical, CA:true
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer

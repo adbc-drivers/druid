@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import sys
 from pathlib import Path
 
@@ -57,7 +58,8 @@ def driver_path(driver: adbc_drivers_validation.model.DriverQuirks) -> str:
 @pytest.fixture(scope="session", autouse=True)
 def setup_druid_fixtures(
     driver: adbc_drivers_validation.model.DriverQuirks,
-    request: pytest.FixtureRequest,
 ) -> None:
-    database_options = request.getfixturevalue("db_kwargs")
-    DruidFixtures(str(database_options["uri"])).load(driver.query_set)
+    uri = os.environ.get("DRUID_FIXTURES_URI")
+    if not uri:
+        pytest.skip("Must set DRUID_FIXTURES_URI")
+    DruidFixtures(uri).load(driver.query_set)
