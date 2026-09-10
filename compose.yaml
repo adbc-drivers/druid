@@ -26,7 +26,7 @@ services:
       - ./ci/docker/certs:/work/certs
 
   test-service:
-    image: apache/druid:36.0.0
+    image: apache/druid:37.0.0
     platform: linux/amd64
     working_dir: /opt/druid
     entrypoint: ["/bin/bash", "/opt/druid/ci/start-druid.sh"]

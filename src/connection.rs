@@ -42,7 +42,7 @@ const SUPPORTED_INFO_CODES: &[InfoCode] = &[
 ];
 
 /// Arrow library version used by this driver.
-const ARROW_VERSION: &str = "v57.3.0";
+const ARROW_VERSION: &str = "v59.3.0";
 
 /// Table types supported by Druid.
 const SUPPORTED_TABLE_TYPES: &[&str] = &["TABLE", "SYSTEM TABLE"];
@@ -289,7 +289,10 @@ impl Connection for DruidConnection {
         ))
     }
 
-    fn get_info(&self, codes: Option<HashSet<InfoCode>>) -> Result<impl RecordBatchReader + Send> {
+    fn get_info(
+        &self,
+        codes: Option<HashSet<InfoCode>>,
+    ) -> Result<Box<dyn RecordBatchReader + Send>> {
         let mut builder = GetInfoBuilder::new();
 
         // Determine which codes to return
@@ -322,7 +325,7 @@ impl Connection for DruidConnection {
         }
 
         let batch = builder.finish()?;
-        Ok(SingleBatchReader::new(batch))
+        Ok(Box::new(SingleBatchReader::new(batch)))
     }
 
     fn get_objects(
@@ -333,7 +336,7 @@ impl Connection for DruidConnection {
         table_name: Option<&str>,
         table_type: Option<Vec<&str>>,
         column_name: Option<&str>,
-    ) -> Result<impl RecordBatchReader + Send> {
+    ) -> Result<Box<dyn RecordBatchReader + Send>> {
         let mut builder = GetObjectsBuilder::new();
 
         // Druid only has "druid" catalog
@@ -341,10 +344,10 @@ impl Connection for DruidConnection {
         if let Some(cat) = catalog {
             if cat.is_empty() {
                 // Empty string = only objects without catalog, Druid always has "druid"
-                return Ok(SingleBatchReader::new(builder.finish(depth)?));
+                return Ok(Box::new(SingleBatchReader::new(builder.finish(depth)?)));
             }
             if !cat.eq_ignore_ascii_case("druid") {
-                return Ok(SingleBatchReader::new(builder.finish(depth)?));
+                return Ok(Box::new(SingleBatchReader::new(builder.finish(depth)?)));
             }
         }
 
@@ -352,7 +355,7 @@ impl Connection for DruidConnection {
 
         // At Catalogs depth, we're done
         if matches!(depth, ObjectDepth::Catalogs) {
-            return Ok(SingleBatchReader::new(builder.finish(depth)?));
+            return Ok(Box::new(SingleBatchReader::new(builder.finish(depth)?)));
         }
 
         // Query schemas
@@ -363,7 +366,7 @@ impl Connection for DruidConnection {
 
         // At Schemas depth, we're done
         if matches!(depth, ObjectDepth::Schemas) {
-            return Ok(SingleBatchReader::new(builder.finish(depth)?));
+            return Ok(Box::new(SingleBatchReader::new(builder.finish(depth)?)));
         }
 
         // Query tables
@@ -374,7 +377,7 @@ impl Connection for DruidConnection {
 
         // At Tables depth, we're done
         if matches!(depth, ObjectDepth::Tables) {
-            return Ok(SingleBatchReader::new(builder.finish(depth)?));
+            return Ok(Box::new(SingleBatchReader::new(builder.finish(depth)?)));
         }
 
         // Query columns (for Columns or All depth)
@@ -383,7 +386,7 @@ impl Connection for DruidConnection {
             builder.add_column("druid", &col.schema_name, &col.table_name, col.info);
         }
 
-        Ok(SingleBatchReader::new(builder.finish(depth)?))
+        Ok(Box::new(SingleBatchReader::new(builder.finish(depth)?)))
     }
 
     fn get_table_schema(
@@ -442,7 +445,7 @@ impl Connection for DruidConnection {
         Ok(Schema::new(fields))
     }
 
-    fn get_table_types(&self) -> Result<impl RecordBatchReader + Send> {
+    fn get_table_types(&self) -> Result<Box<dyn RecordBatchReader + Send>> {
         let mut builder = StringBuilder::new();
         for table_type in SUPPORTED_TABLE_TYPES {
             builder.append_value(table_type);
@@ -459,11 +462,11 @@ impl Connection for DruidConnection {
             )
         })?;
 
-        Ok(SingleBatchReader::new(batch))
+        Ok(Box::new(SingleBatchReader::new(batch)))
     }
 
-    fn get_statistic_names(&self) -> Result<impl RecordBatchReader + Send> {
-        Err::<SingleBatchReader, Error>(Error::with_message_and_status(
+    fn get_statistic_names(&self) -> Result<Box<dyn RecordBatchReader + Send>> {
+        Err(Error::with_message_and_status(
             "get_statistic_names not implemented".to_string(),
             Status::NotImplemented,
         ))
@@ -475,8 +478,8 @@ impl Connection for DruidConnection {
         _db_schema: Option<&str>,
         _table_name: Option<&str>,
         _approximate: bool,
-    ) -> Result<impl RecordBatchReader + Send> {
-        Err::<SingleBatchReader, Error>(Error::with_message_and_status(
+    ) -> Result<Box<dyn RecordBatchReader + Send>> {
+        Err(Error::with_message_and_status(
             "get_statistics not implemented".to_string(),
             Status::NotImplemented,
         ))
@@ -499,8 +502,8 @@ impl Connection for DruidConnection {
     fn read_partition(
         &self,
         _partition: impl AsRef<[u8]>,
-    ) -> Result<impl RecordBatchReader + Send> {
-        Err::<SingleBatchReader, Error>(Error::with_message_and_status(
+    ) -> Result<Box<dyn RecordBatchReader + Send>> {
+        Err(Error::with_message_and_status(
             "read_partition not implemented".to_string(),
             Status::NotImplemented,
         ))
@@ -608,6 +611,23 @@ mod tests {
 
         assert!(types.contains(&"TABLE"));
         assert!(types.contains(&"SYSTEM TABLE"));
+    }
+
+    #[test]
+    fn test_get_info_reports_arrow_version() {
+        let conn = DruidConnection::new("http://localhost:8888", None, None).unwrap();
+        let mut reader = conn
+            .get_info(Some(HashSet::from([InfoCode::DriverArrowVersion])))
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        let values = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::UnionArray>()
+            .unwrap();
+        let value = values.value(0);
+
+        assert_eq!(value.as_string::<i32>().value(0), "v59.3.0");
     }
 
     #[test]

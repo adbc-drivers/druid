@@ -33,7 +33,7 @@ from .druid_fixtures import DruidFixtures
 
 def pytest_addoption(parser):
     adbc_drivers_validation.tests.conftest.pytest_addoption(parser)
-    parser.addoption("--vendor-version", action="store", default="36")
+    parser.addoption("--vendor-version", action="store", default="37")
 
 
 @pytest.fixture(scope="session")

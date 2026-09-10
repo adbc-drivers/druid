@@ -23,8 +23,8 @@ class DruidQuirks(model.DriverQuirks):
     driver = "adbc_driver_druid"
     driver_name = "ADBC Druid Driver"
     vendor_name = "Apache Druid"
-    vendor_version = "36.0.0"
-    short_version = "36"
+    vendor_version = "37.0.0"
+    short_version = "37"
     features = model.DriverFeatures(
         connection_get_table_schema=False,
         connection_set_current_catalog=False,

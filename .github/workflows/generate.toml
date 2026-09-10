@@ -19,4 +19,4 @@ driver = "druid"
 subdir = "."
 
 [[lang.rust.validation.configs]]
-vendor_version = "36"
+vendor_version = "37"
