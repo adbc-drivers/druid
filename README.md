@@ -16,25 +16,52 @@ limitations under the License.
 
 # ADBC Driver for Apache Druid
 
-An [ADBC driver](https://arrow.apache.org/adbc/current/index.html) for [Apache Druid](https://druid.apache.org).
+![Vendor: Apache Druid](https://img.shields.io/badge/vendor-Apache%20Druid-blue?style=flat-square)
+![Implementation: Rust](https://img.shields.io/badge/implementation-Rust-violet?style=flat-square)
+![Status: Experimental](https://img.shields.io/badge/status-experimental-red?style=flat-square)
 
-## Local Druid
+This project is not part of the Apache Software Foundation.
 
-The repository includes a single-container Apache Druid 37 micro-quickstart environment. Start it with:
+An [ADBC driver](https://arrow.apache.org/adbc/) for
+[Apache Druid](https://druid.apache.org/).
 
-```bash
-docker compose up --detach --wait test-service
+## Installation
+
+Pre-packaged prerelease builds are available for various platforms from the
+[Columnar](https://columnar.tech/) CDN. They can be installed by any tool that
+supports [ADBC](https://arrow.apache.org/adbc/) Driver Manifests, such as
+[dbc](https://docs.columnar.tech/dbc):
+
+```sh
+dbc install --pre druid
 ```
 
-The Druid SQL API and web console are available at <http://localhost:8888>. The container starts without any datasources; loading test data is a separate step.
+Only prerelease versions of the driver are currently available, so `--pre` is
+required.
 
-Verify it with a simple query:
+See [Building](#building) if you would rather build the driver yourself.
 
-```bash
-curl --fail --silent --show-error \
-  --header 'Content-Type: application/json' \
-  --data '{"query":"SELECT 1","resultFormat":"array"}' \
-  http://localhost:8888/druid/v2/sql
+## Usage
+
+The driver can be loaded by any ADBC driver manager. For example, with the
+[Python ADBC driver manager](https://pypi.org/project/adbc-driver-manager/):
+
+```python
+from adbc_driver_manager import dbapi
+
+connection = dbapi.connect(
+    driver="druid",
+    db_kwargs={"uri": "druid://localhost:8888?tls=false"},
+)
 ```
 
-Stop the stack with `docker compose down`. To also remove its persisted metadata and segments, run `docker compose down --volumes`.
+See the [driver documentation](docs/druid.md) for connection options, TLS
+configuration, and supported features and types.
+
+## Building
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
