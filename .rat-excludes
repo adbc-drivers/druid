@@ -12,17 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.editorconfig
-.gitattributes
-.gitignore
-.rustfmt.toml
-AGENTS.md
 Cargo.lock
-Cargo.toml
-LICENSE
 license.tpl
 pixi.lock
-pixi.toml
-rust-toolchain.toml
-validation/pytest.ini
-.github/pull_request_template.md

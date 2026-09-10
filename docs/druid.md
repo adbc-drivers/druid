@@ -22,12 +22,16 @@
 
 This driver provides access to [Apache Druid][druid], a high performance, real-time analytics database.
 
-## Installation
+:::{note}
+This project is not part of the Apache Software Foundation.
+:::
+
+## Installation & Quickstart
 
 The Druid driver can be installed with [dbc](https://docs.columnar.tech/dbc):
 
 ```bash
-dbc install druid
+dbc install --pre druid
 ```
 
 ## Connecting
