@@ -20,7 +20,7 @@ An [ADBC driver](https://arrow.apache.org/adbc/current/index.html) for [Apache D
 
 ## Local Druid
 
-The repository includes a single-container Apache Druid 36 micro-quickstart environment. Start it with:
+The repository includes a single-container Apache Druid 37 micro-quickstart environment. Start it with:
 
 ```bash
 docker compose up --detach --wait test-service

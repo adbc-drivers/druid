@@ -168,11 +168,11 @@ impl Statement for DruidStatement {
         Ok(())
     }
 
-    fn execute(&mut self) -> Result<impl RecordBatchReader + Send> {
+    fn execute(&mut self) -> Result<Box<dyn RecordBatchReader + Send>> {
         let params = self.take_parameters()?;
         let context = self.build_context();
         let batch = self.client.execute_query(self.query()?, params, context)?;
-        Ok(SingleBatchReader::new(batch))
+        Ok(Box::new(SingleBatchReader::new(batch)))
     }
 
     fn execute_update(&mut self) -> Result<Option<i64>> {

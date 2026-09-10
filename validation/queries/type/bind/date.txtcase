@@ -16,7 +16,7 @@
 
 [tags]
 partial-support = true
-caveats = ["Druid 36 rejects NULL DATE query parameters, so NULL binding is not supported."]
+caveats = ["Druid 37 rejects NULL DATE query parameters, so NULL binding is not supported."]
 
 // part: bind_query
 
