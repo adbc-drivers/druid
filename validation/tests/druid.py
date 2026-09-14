@@ -21,15 +21,15 @@ from adbc_drivers_validation import model, quirks
 class DruidQuirks(model.DriverQuirks):
     name = "druid"
     driver = "adbc_driver_druid"
-    driver_name = "ADBC Druid Driver"
+    driver_name = "ADBC Driver Foundry Driver for Apache Druid"
     vendor_name = "Apache Druid"
     vendor_version = "37.0.0"
     short_version = "37"
     features = model.DriverFeatures(
-        connection_get_table_schema=False,
+        connection_get_table_schema=True,
         connection_set_current_catalog=False,
         connection_set_current_schema=False,
-        connection_transactions=True,
+        connection_transactions=False,
         get_objects=False,
         get_objects_constraints_check=False,
         get_objects_constraints_foreign=False,
@@ -43,10 +43,10 @@ class DruidQuirks(model.DriverQuirks):
         statement_bulk_ingest_schema=False,
         statement_bulk_ingest_temporary=False,
         statement_execute_schema=True,
-        statement_get_parameter_schema=True,
-        statement_prepare=True,
-        statement_rows_affected=True,
-        statement_rows_affected_ddl=True,
+        statement_get_parameter_schema=False,
+        statement_prepare=False,
+        statement_rows_affected=False,
+        statement_rows_affected_ddl=False,
         supported_xdbc_fields=[],
     )
     setup = model.DriverSetup(

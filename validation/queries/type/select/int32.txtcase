@@ -22,6 +22,27 @@ GROUP BY idx, res
 ORDER BY idx
 LIMIT 100
 
+// part: catalog_schema
+
+// GetTableSchema returns the whole datasource. The harness drops the first
+// column (__time), leaving the idx helper column and the stored res column.
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "idx",
+            "format": "l",
+            "flags": ["nullable"]
+        },
+        {
+            "name": "res",
+            "format": "l",
+            "flags": ["nullable"]
+        }
+    ]
+}
+
 // part: expected_schema
 
 {

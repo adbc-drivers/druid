@@ -332,7 +332,10 @@ mod tests {
         builder.add_string(InfoCode::VendorName, "Apache Druid");
         builder.add_bool(InfoCode::VendorSql, true);
         builder.add_bool(InfoCode::VendorSubstrait, false);
-        builder.add_string(InfoCode::DriverName, "ADBC Druid Driver");
+        builder.add_string(
+            InfoCode::DriverName,
+            "ADBC Driver Foundry Driver for Apache Druid",
+        );
         builder.add_int64(InfoCode::DriverAdbcVersion, 1_001_000);
 
         let batch = builder.finish().unwrap();

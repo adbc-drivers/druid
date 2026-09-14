@@ -20,7 +20,8 @@
 
 {{ heading|safe }}
 
-This driver provides access to [Apache Druid][druid], a high performance, real-time analytics database.
+This driver provides access to [Apache Druid][druid], a high-performance,
+real-time analytics database.
 
 :::{note}
 This project is not part of the Apache Software Foundation.

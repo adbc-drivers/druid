@@ -13,5 +13,6 @@
 # limitations under the License.
 
 Cargo.lock
+.github/pull_request_template.md
 license.tpl
 pixi.lock
