@@ -314,8 +314,12 @@ impl Connection for DruidConnection {
                 }
                 InfoCode::VendorSql => builder.add_bool(code, true),
                 InfoCode::VendorSubstrait => builder.add_bool(code, false),
-                InfoCode::DriverName => builder.add_string(code, "ADBC Druid Driver"),
-                InfoCode::DriverVersion => builder.add_string(code, env!("CARGO_PKG_VERSION")),
+                InfoCode::DriverName => {
+                    builder.add_string(code, "ADBC Driver Foundry Driver for Apache Druid");
+                }
+                InfoCode::DriverVersion => {
+                    builder.add_string(code, concat!("v", env!("CARGO_PKG_VERSION")));
+                }
                 InfoCode::DriverArrowVersion => builder.add_string(code, ARROW_VERSION),
                 InfoCode::DriverAdbcVersion => {
                     builder.add_int64(code, i64::from(ADBC_VERSION_1_1_0));
