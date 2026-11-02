@@ -93,7 +93,7 @@ Before opening a pull request:
 - Review your changes and make sure no stray files are included.
 - Ensure applicable new files have the Apache license header.
 - Check for an existing issue. If there is none, file one unless the change is
-  trivial. Assign the issue to yourself by commenting just the word `take`.
+  trivial. Ask a maintainer to assign the issue to you before proceeding.
 - Keep Rust code idiomatic, concise, and formatted with `cargo fmt`.
 - Address all `cargo clippy` warnings.
 - Install [pre-commit](https://pre-commit.com/) and run the static checks. Make
