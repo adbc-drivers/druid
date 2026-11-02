@@ -12,12 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 from adbc_drivers_validation.tests.query import (
-    TestQuery,  # noqa: F401
+    TestQuery as BaseTestQuery,
+)
+from adbc_drivers_validation.tests.query import (
     generate_tests,
 )
 
 from .druid import get_quirks
+
+
+class TestQuery(BaseTestQuery):
+    @pytest.mark.xfail(
+        strict=True, reason="Druid driver only supports one bound parameter row"
+    )
+    @pytest.mark.parametrize(
+        "batch_size,empty_batches",
+        [
+            pytest.param(None, False, id="single_batch"),
+            pytest.param(2, False, id="multiple_batches"),
+            pytest.param(2, True, id="multiple_batches_with_empty"),
+        ],
+    )
+    def test_query_bind_stream(
+        self, driver, conn, query, batch_size, empty_batches
+    ) -> None:
+        super().test_query_bind_stream(driver, conn, query, batch_size, empty_batches)
 
 
 def pytest_generate_tests(metafunc) -> None:
